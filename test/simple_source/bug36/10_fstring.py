@@ -14,6 +14,7 @@ assert (
 assert "def0" == f"{abc}0"
 assert "defdef" == f"{abc}{abc!s}"
 
+
 # From 3.8 test/test_string.py
 # We had the precedence of yield vs. lambda incorrect.
 def fn(x):
@@ -59,9 +60,9 @@ log_rounds = 5
 assert "05$" == f"{log_rounds:02d}$"
 
 
-def testit(a, b, l):
-    # print(l)
-    return l
+def testit(a, b, ll):
+    # print(ll)
+    return ll
 
 
 # The call below shows the need for BUILD_STRING to count expr arguments.
@@ -97,16 +98,17 @@ else:
 (x, y, width) = ("foo", 2, 10)
 assert f"x={x*y:{width}}" == "x=foofoo    "
 
+
 # Why the fact that the distinction of docstring versus stmt is a
 # string expression is important academic, but we will decompile an
-# equivalent thing. For compatiblity with older Python we'll use "%"
+# equivalent thing. For compatibility with older Python we'll use "%"
 # instead of a format string
 def f():
-    f"""Not a docstring"""
+    f"""Not a docstring"""  # noqa
 
 
 def g():
-    """Not a docstring""" f""
+    """Not a docstring""" f""  # noqa
 
 
 assert f.__doc__ is None
@@ -129,3 +131,17 @@ assert f'{f"{0}"*3}' == "000"
 # The former, {{ confuses the format strings so dictionary/set comprehensions
 # don't work.
 assert f"expr={ {x: y for x, y in [(1, 2), ]}}" == "expr={1: 2}"
+
+
+class Line:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+    # From 3.7 test_typing.py
+    def __str__(self):
+        return f"{self.x} -> {self.y}"
+
+
+line = Line(1, 2)
+assert str(line) == "1 -> 2"

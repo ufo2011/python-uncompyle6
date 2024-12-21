@@ -1,12 +1,14 @@
-#  Copyright (c) 2016-2018, 2020 Rocky Bernstein
+#  Copyright (c) 2016-2018, 2020, 2022, 2024 Rocky Bernstein
 """
 spark grammar differences over Python2.6 for Python 2.5.
 """
 
-from uncompyle6.parser import PythonParserSingle
 from spark_parser import DEFAULT_DEBUG as PARSER_DEFAULT_DEBUG
+
+from uncompyle6.parser import PythonParserSingle
 from uncompyle6.parsers.parse26 import Python26Parser
-from uncompyle6.parsers.reducecheck import (ifelsestmt)
+from uncompyle6.parsers.reducecheck import ifelsestmt
+
 
 class Python25Parser(Python26Parser):
     def __init__(self, debug_parser=PARSER_DEFAULT_DEBUG):
@@ -31,9 +33,11 @@ class Python25Parser(Python26Parser):
                       POP_BLOCK LOAD_CONST COME_FROM with_cleanup
 
         # Semantic actions want store to be at index 2
-        withasstmt ::= expr setupwithas store suite_stmts_opt
+        with_as ::= expr setupwithas store suite_stmts_opt
                        POP_BLOCK LOAD_CONST COME_FROM with_cleanup
 
+        # The last except of a "try: ... except" can do this...
+        except_suite ::= c_stmts_opt COME_FROM JUMP_ABSOLUTE POP_TOP
 
         store ::= STORE_NAME
         store ::= STORE_FAST
@@ -46,7 +50,7 @@ class Python25Parser(Python26Parser):
 
         # Python 2.6 omits the LOAD_FAST DELETE_FAST below
         # withas is allowed as a "from future" in 2.5
-        withasstmt ::= expr setupwithas store suite_stmts_opt
+        with_as ::= expr setupwithas store suite_stmts_opt
                        POP_BLOCK LOAD_CONST COME_FROM
                        with_cleanup
 
@@ -56,15 +60,23 @@ class Python25Parser(Python26Parser):
 
         kvlist ::= kvlist kv
         kv     ::= DUP_TOP expr ROT_TWO expr STORE_SUBSCR
+
+        _ifstmts_jump ::= c_stmts_opt COME_FROM JUMP_ABSOLUTE COME_FROM POP_TOP
+
+
+        # "and_then" is a hack around the fact we have THEN detection.
+        and_then ::= expr JUMP_IF_FALSE THEN POP_TOP expr JUMP_IF_FALSE THEN POP_TOP
+        testexpr_then ::= and_then
         """
 
     def customize_grammar_rules(self, tokens, customize):
         # Remove grammar rules inherited from Python 2.6 or Python 2
-        self.remove_rules("""
+        self.remove_rules(
+            """
         setupwith  ::= DUP_TOP LOAD_ATTR ROT_TWO LOAD_ATTR CALL_FUNCTION_0 POP_TOP
         with       ::= expr setupwith SETUP_FINALLY suite_stmts_opt
                        POP_BLOCK LOAD_CONST COME_FROM WITH_CLEANUP END_FINALLY
-        withasstmt ::= expr setupwithas store suite_stmts_opt
+        with_as    ::= expr setupwithas store suite_stmts_opt
                        POP_BLOCK LOAD_CONST COME_FROM WITH_CLEANUP END_FINALLY
         assert2       ::= assert_expr jmp_true LOAD_ASSERT expr CALL_FUNCTION_1 RAISE_VARARGS_1
         classdefdeco  ::= classdefdeco1 store
@@ -87,7 +99,8 @@ class Python25Parser(Python26Parser):
                                return_stmt_lambda LAMBDA_MARKER
         if_exp_not_lambda ::= expr jmp_true_then expr return_if_lambda
                               return_stmt_lambda LAMBDA_MARKER
-        """)
+        """
+        )
         super(Python25Parser, self).customize_grammar_rules(tokens, customize)
         if self.version[:2] == (2, 5):
             self.check_reduce["try_except"] = "AST"
@@ -95,9 +108,9 @@ class Python25Parser(Python26Parser):
         self.check_reduce["ifelsestmt"] = "AST"
 
     def reduce_is_invalid(self, rule, ast, tokens, first, last):
-        invalid = super(Python25Parser,
-                        self).reduce_is_invalid(rule, ast,
-                                                tokens, first, last)
+        invalid = super(Python25Parser, self).reduce_is_invalid(
+            rule, ast, tokens, first, last
+        )
         if invalid or tokens is None:
             return invalid
         if rule == ("aug_assign1", ("expr", "expr", "inplace_op", "store")):
@@ -111,6 +124,7 @@ class Python25Parser(Python26Parser):
 
 class Python25ParserSingle(Python26Parser, PythonParserSingle):
     pass
+
 
 if __name__ == "__main__":
     # Check grammar

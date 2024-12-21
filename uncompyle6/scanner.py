@@ -1,4 +1,4 @@
-#  Copyright (c) 2016, 2018-2022 by Rocky Bernstein
+#  Copyright (c) 2016, 2018-2024 by Rocky Bernstein
 #  Copyright (c) 2005 by Dan Pascu <dan@windowmaker.org>
 #  Copyright (c) 2000-2002 by hartmut Goebel <h.goebel@crazy-compilers.com>
 #  Copyright (c) 1999 John Aycock
@@ -21,12 +21,12 @@ scanner/ingestion module. From here we call various version-specific
 scanners, e.g. for Python 2.7 or 3.4.
 """
 
-from typing import Optional
+from abc import ABC
 from array import array
 from collections import namedtuple
+from types import ModuleType
+from typing import Optional, Union
 
-from uncompyle6.scanners.tok import Token
-from xdis.version_info import IS_PYPY, version_tuple_to_str
 import xdis
 from xdis import (
     Bytecode,
@@ -36,6 +36,9 @@ from xdis import (
     instruction_size,
     next_offset,
 )
+from xdis.version_info import IS_PYPY, version_tuple_to_str
+
+from uncompyle6.scanners.tok import Token
 
 # The byte code versions we support.
 # Note: these all have to be tuples of 2 ints
@@ -79,6 +82,7 @@ CANONIC2VERSION["3.5.2"] = 3.5
 # FIXME: DRY
 L65536 = 65536
 
+
 def long(num):
     return num
 
@@ -86,7 +90,7 @@ def long(num):
 CONST_COLLECTIONS = ("CONST_LIST", "CONST_SET", "CONST_DICT", "CONST_MAP")
 
 
-class Code(object):
+class Code:
     """
     Class for representing code-objects.
 
@@ -95,17 +99,24 @@ class Code(object):
     """
 
     def __init__(self, co, scanner, classname=None, show_asm=None):
+        # Full initialization is given below, but for linters
+        # well set up some initial values.
+        self.co_code = None  # Really either bytes for >= 3.0 and string in < 3.0
+
         for i in dir(co):
             if i.startswith("co_"):
                 setattr(self, i, getattr(co, i))
         self._tokens, self._customize = scanner.ingest(co, classname, show_asm=show_asm)
 
 
-class Scanner(object):
+class Scanner(ABC):
     def __init__(self, version: tuple, show_asm=None, is_pypy=False):
         self.version = version
         self.show_asm = show_asm
         self.is_pypy = is_pypy
+
+        # Temoorary initialization.
+        self.opc = ModuleType("uninitialized")
 
         if version[:2] in PYTHON_VERSIONS:
             v_str = f"""opcode_{version_tuple_to_str(version, start=0, end=2, delimiter="")}"""
@@ -124,18 +135,16 @@ class Scanner(object):
         # FIXME: This weird Python2 behavior is not Python3
         self.resetTokenClass()
 
-    def bound_collection_from_tokens(
-        self, tokens, t, i, collection_type
-    ):
+    def bound_collection_from_tokens(self, tokens, t, i, collection_type):
         count = t.attr
         assert isinstance(count, int)
 
         assert count <= i
 
         if collection_type == "CONST_DICT":
-            # constant dictonaries work via BUILD_CONST_KEY_MAP and
+            # constant dictionaries work via BUILD_CONST_KEY_MAP and
             # handle the values() like sets and lists.
-            # However the keys() are an LOAD_CONST of the keys.
+            # However, the keys() are an LOAD_CONST of the keys.
             # adjust offset to account for this
             count += 1
 
@@ -172,9 +181,13 @@ class Scanner(object):
             )
         )
         for j in range(collection_start, i):
+            if tokens[j] == "LOAD_CONST":
+                opname = "ADD_VALUE"
+            else:
+                opname = "ADD_VALUE_VAR"
             new_tokens.append(
                 Token(
-                    opname="ADD_VALUE",
+                    opname=opname,
                     attr=tokens[j].attr,
                     pattr=tokens[j].pattr,
                     offset=tokens[j].offset,
@@ -281,6 +294,12 @@ class Scanner(object):
             return False
         return offset < self.get_target(offset)
 
+    def ingest(self, co, classname=None, code_objects={}, show_asm=None):
+        """
+        Code to tokenize disassembly. Subclasses must implement this.
+        """
+        raise NotImplementedError("This method should have been implemented")
+
     def prev_offset(self, offset: int) -> int:
         return self.insts[self.offset2inst_index[offset] - 1].offset
 
@@ -314,15 +333,6 @@ class Scanner(object):
 
     def next_offset(self, op, offset: int) -> int:
         return xdis.next_offset(op, self.opc, offset)
-
-    def print_bytecode(self):
-        for i in self.op_range(0, len(self.code)):
-            op = self.code[i]
-            if op in self.JUMP_OPS:
-                dest = self.get_target(i, op)
-                print("%i\t%s\t%i" % (i, self.opname[op], dest))
-            else:
-                print("%i\t%s\t" % (i, self.opname[op]))
 
     def first_instr(self, start: int, end: int, instr, target=None, exact=True):
         """
@@ -425,7 +435,7 @@ class Scanner(object):
         """
         try:
             None in instr
-        except:
+        except Exception:
             instr = [instr]
 
         first = self.offset2inst_index[start]
@@ -479,7 +489,6 @@ class Scanner(object):
         result = []
         extended_arg = 0
         for offset in self.op_range(start, end):
-
             op = code[offset]
 
             if op == self.opc.EXTENDED_ARG:
@@ -538,7 +547,6 @@ class Scanner(object):
                 offset = inst.offset
                 continue
             if last_was_extarg:
-
                 # j = self.stmts.index(inst.offset)
                 # self.lines[j] = offset
 
@@ -591,26 +599,24 @@ class Scanner(object):
             target = parent["end"]
         return target
 
-    def setTokenClass(self, tokenClass) -> Token:
+    def setTokenClass(self, tokenClass: Token) -> Token:
         self.Token = tokenClass
         return self.Token
 
 
-def parse_fn_counts(argc):
-    return ((argc & 0xFF), (argc >> 8) & 0xFF, (argc >> 16) & 0x7FFF)
-
-
-def get_scanner(version, is_pypy=False, show_asm=None):
-
+def get_scanner(version: Union[str, tuple], is_pypy=False, show_asm=None) -> Scanner:
+    """
+    Import the right scanner module for ``version`` and return the Scanner class
+    in that module.
+    """
     # If version is a string, turn that into the corresponding float.
     if isinstance(version, str):
         if version not in canonic_python_version:
-            raise RuntimeError("Unknown Python version in xdis %s" % version)
+            raise RuntimeError(f"Unknown Python version in xdis {version}")
         canonic_version = canonic_python_version[version]
         if canonic_version not in CANONIC2VERSION:
             raise RuntimeError(
-                "Unsupported Python version %s (canonic %s)"
-                % (version, canonic_version)
+                f"Unsupported Python version {version} (canonic {canonic_version})"
             )
         version = CANONIC2VERSION[canonic_version]
 
@@ -661,5 +667,6 @@ if __name__ == "__main__":
     # scanner = get_scanner('2.7.13', True)
     # scanner = get_scanner(sys.version[:5], False)
     from xdis.version_info import PYTHON_VERSION_TRIPLE
+
     scanner = get_scanner(PYTHON_VERSION_TRIPLE, IS_PYPY, True)
     tokens, customize = scanner.ingest(co, {}, show_asm="after")

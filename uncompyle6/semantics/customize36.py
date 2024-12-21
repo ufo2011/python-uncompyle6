@@ -1,4 +1,4 @@
-#  Copyright (c) 2019-2021 by Rocky Bernstein
+#  Copyright (c) 2019-2024 by Rocky Bernstein
 #
 #  This program is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -15,16 +15,18 @@
 """Isolate Python 3.6 version-specific semantic actions here.
 """
 
-from xdis import iscode
 from spark_parser.ast import GenericASTTraversalPruningException
+from xdis import iscode
+
 from uncompyle6.scanners.tok import Token
-from uncompyle6.semantics.helper import flatten_list, escape_string, strip_quotes
 from uncompyle6.semantics.consts import (
     INDENT_PER_LEVEL,
     PRECEDENCE,
     TABLE_DIRECT,
     TABLE_R,
 )
+from uncompyle6.semantics.helper import escape_string, flatten_list, strip_quotes
+from uncompyle6.util import get_code_name
 
 
 def escape_format(s):
@@ -36,8 +38,7 @@ def escape_format(s):
 #######################
 
 
-def customize_for_version36(self, version):
-
+def customize_for_version36(self, version: tuple):
     # fmt: off
     PRECEDENCE["call_kw"]          =   0
     PRECEDENCE["call_kw36"]        =   1
@@ -49,7 +50,7 @@ def customize_for_version36(self, version):
     PRECEDENCE["dict_pack"]        =   0  # **{ ... }
     PRECEDENCE["formatted_value1"] = 100
 
-    TABLE_DIRECT.update(
+    self.TABLE_DIRECT.update(
         {
             "ann_assign_init_value": (
                 "%|%c = %p\n",
@@ -61,7 +62,8 @@ def customize_for_version36(self, version):
                 "%|async for %c in %c:\n%+%c%-\n\n",
                 (9, "store"),
                 (1, "expr"),
-                (-9, "for_block"),  # Count from end, since COME_FROM shifts things in the forward direction
+                # Count from end, since COME_FROM shifts things in the forward direction
+                (-9, ("for_block", "pass")),
             ),
             "async_forelse_stmt36": (
                 "%|async for %c in %c:\n%+%c%-%|else:\n%+%c%-\n\n",
@@ -94,7 +96,7 @@ def customize_for_version36(self, version):
         }
     )
 
-    TABLE_R.update(
+    self.TABLE_R.update(
         {
             "CALL_FUNCTION_EX":    ("%c(*%P)", 0, (1, 2, ", ", 100)),
             # Not quite right
@@ -167,6 +169,9 @@ def customize_for_version36(self, version):
         if node == "classdefdeco2":
             if isinstance(node[1][1].attr, str):
                 class_name = node[1][1].attr
+                if self.is_pypy and class_name.find("<locals>") > 0:
+                    class_name = class_name.split(".")[-1]
+
             else:
                 class_name = node[1][2].attr
             build_class = node
@@ -186,7 +191,7 @@ def customize_for_version36(self, version):
                 code_node = build_class[1][1]
             else:
                 code_node = build_class[1][0]
-            class_name = code_node.attr.co_name
+            class_name = get_code_name(code_node.attr)
 
         assert "mkfunc" == build_class[1]
         mkfunc = build_class[1]
@@ -203,23 +208,24 @@ def customize_for_version36(self, version):
         elif build_class[1][0] == "load_closure":
             # Python 3 with closures not functions
             load_closure = build_class[1]
-            if hasattr(load_closure[-3], "attr"):
-                # Python 3.3 classes with closures work like this.
-                # Note have to test before 3.2 case because
-                # index -2 also has an attr.
-                subclass_code = load_closure[-3].attr
-            elif hasattr(load_closure[-2], "attr"):
-                # Python 3.2 works like this
-                subclass_code = load_closure[-2].attr
-            else:
-                raise "Internal Error n_classdef: cannot find class body"
+            subclass_code = None
+            for i in range(-4, -1):
+                if load_closure[i] == "LOAD_CODE":
+                    subclass_code = load_closure[i].attr
+                    break
+            if subclass_code is None:
+                raise RuntimeError(
+                    "Internal Error n_classdef: cannot find " "class body"
+                )
             if hasattr(build_class[3], "__len__"):
                 if not subclass_info:
                     subclass_info = build_class[3]
             elif hasattr(build_class[2], "__len__"):
                 subclass_info = build_class[2]
             else:
-                raise "Internal Error n_classdef: cannot superclass name"
+                raise RuntimeError(
+                    "Internal Error n_classdef: cannot " "superclass name"
+                )
         elif node == "classdefdeco2":
             subclass_info = node
             subclass_code = build_class[1][0].attr
@@ -270,7 +276,7 @@ def customize_for_version36(self, version):
         if value == "":
             fmt = "%c(%p)"
         else:
-            fmt = "%%c(%s, %%p)" % value
+            fmt = "%c" + ("(%s, " % value).replace("%", "%%") + "%p)"
 
         self.template_engine(
             (fmt, (0, "expr"), (2, "build_map_unpack_with_call", 100)), node
@@ -289,7 +295,7 @@ def customize_for_version36(self, version):
         if value == "":
             fmt = "%c(%p)"
         else:
-            fmt = "%%c(%s, %%p)" % value
+            fmt = "%c" + ("(%s, " % value).replace("%", "%%") + "%p)"
 
         self.template_engine(
             (fmt, (0, "expr"), (2, "build_map_unpack_with_call", 100)), node
@@ -393,7 +399,7 @@ def customize_for_version36(self, version):
 
     def call36_tuple(node):
         """
-        A tuple used in a call, these are like normal tuples but they
+        A tuple used in a call; these are like normal tuples, but they
         don't have the enclosing parenthesis.
         """
         assert node == "tuple"
@@ -668,7 +674,7 @@ def customize_for_version36(self, version):
             else:
                 # {{ and }} in Python source-code format strings mean
                 # { and } respectively. But only when *not* part of a
-                # formatted value. However in the LOAD_STR
+                # formatted value. However, in the LOAD_STR
                 # bytecode, the escaping of the braces has been
                 # removed. So we need to put back the braces escaping in
                 # reconstructing the source.
@@ -701,6 +707,7 @@ def customize_for_version36(self, version):
             self.comprehension_walk_newer(node, iter_index=3, code_index=0)
         self.write("]")
         self.prune()
+
     self.n_list_comp_async = n_list_comp_async
 
     # def kwargs_only_36(node):

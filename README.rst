@@ -41,7 +41,7 @@ although compatible with the original intention, is yet a little bit
 different.  See this_ for more information.
 
 Python fragment deparsing given an instruction offset is useful in
-showing stack traces and can be encorporated into any program that
+showing stack traces and can be incorporated into any program that
 wants to show a location in more detail than just a line number at
 runtime.  This code can be also used when source-code information does
 not exist and there is just bytecode. Again, my debuggers make use of
@@ -161,8 +161,8 @@ Python syntax changes, you should use this option if the bytecode is
 the right bytecode for the Python interpreter that will be checking
 the syntax.
 
-You can also cross compare the results with either another version of
-`uncompyle6` since there are are sometimes regressions in decompiling
+You can also cross compare the results with another version of
+*uncompyle6* since there are sometimes regressions in decompiling
 specific bytecode as the overall quality improves.
 
 For Python 3.7 and 3.8, the code in decompyle3_ is generally
@@ -199,7 +199,7 @@ On the lower end of Python versions, decompilation seems pretty good although
 we don't have any automated testing in place for Python's distributed tests.
 Also, we don't have a Python interpreter for versions 1.6, and 2.0.
 
-In the Python 3 series, Python support is is strongest around 3.4 or
+In the Python 3 series, Python support is strongest around 3.4 or
 3.3 and drops off as you move further away from those versions. Python
 3.0 is weird in that it in some ways resembles 2.6 more than it does
 3.1 or 2.7. Python 3.6 changes things drastically by using word codes
@@ -265,7 +265,7 @@ be solved if one were to put in the time to do so. The problem is that
 there aren't that many people who have been working on bug fixing.
 
 Some of the bugs in 3.7 and 3.8 are simply a matter of back-porting
-the fixes in decompyle3. Volunteers are welcome to do so.
+the fixes in *decompyle3*. Any volunteers?
 
 You may run across a bug, that you want to report. Please do so after
 reading `How to report a bug
@@ -274,11 +274,15 @@ follow the `instructions when opening an issue <https://github.com/rocky/python-
 
 Be aware that it might not get my attention for a while. If you
 sponsor or support the project in some way, I'll prioritize your
-issues above the queue of other things I might be doing instead.
+issues above the queue of other things I might be doing instead. In
+rare situtations, I can do a hand decompilation of bytecode for a fee.
+However this is expansive, usually beyond what most people are willing
+to spend.
 
 See Also
 --------
 
+* https://rocky.github.io/blackhat-asia-2024-additional/all-notes-print.html :  How to Read and Write a High-Level Bytecode Decompiler: ``uncompyle6`` ``decompyle3`` -- BlackHat 2024 Asia (`video <https://www.youtube.com/watch?v=NA77SFncppE>`_). A big thanks to the Organizers and Reviewers for letting me speak. This kind of thing encourages me to work on projects like this.
 * https://github.com/rocky/python-decompile3 : Much smaller and more modern code, focusing on 3.7 and 3.8. Changes in that will get migrated back here.
 * https://code.google.com/archive/p/unpyc3/ : supports Python 3.2 only. The above projects use a different decompiling technique than what is used here. Currently unmaintained.
 * https://github.com/figment/unpyc3/ : fork of above, but supports Python 3.3 only. Includes some fixes like supporting function annotations. Currently unmaintained.
@@ -303,8 +307,8 @@ See Also
 .. _uncompyle2: https://github.com/wibiti/uncompyle2
 .. _unpyc37: https://github.com/andrew-tavera/unpyc37
 .. _this: https://github.com/rocky/python-uncompyle6/wiki/Deparsing-technology-and-its-use-in-exact-location-reporting
-.. |buildstatus| image:: https://travis-ci.org/rocky/python-uncompyle6.svg
-		 :target: https://travis-ci.org/rocky/python-uncompyle6
+.. |buildstatus| image:: https://circleci.com/gh/rocky/python-uncompyle6.svg?style=svg
+		 :target: https://app.circleci.com/pipelines/github/rocky/python-uncompyle6
 .. |packagestatus| image:: https://repology.org/badge/vertical-allrepos/python:uncompyle6.svg
 		 :target: https://repology.org/project/python:uncompyle6/versions
 .. _PJOrion: http://www.koreanrandom.com/forum/topic/15280-pjorion-%D1%80%D0%B5%D0%B4%D0%B0%D0%BA%D1%82%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D0%B5-%D0%BA%D0%BE%D0%BC%D0%BF%D0%B8%D0%BB%D1%8F%D1%86%D0%B8%D1%8F-%D0%B4%D0%B5%D0%BA%D0%BE%D0%BC%D0%BF%D0%B8%D0%BB%D1%8F%D1%86%D0%B8%D1%8F-%D0%BE%D0%B1%D1%84

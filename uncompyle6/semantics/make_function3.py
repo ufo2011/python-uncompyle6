@@ -1,4 +1,4 @@
-#  Copyright (c) 2015-2021 by Rocky Bernstein
+#  Copyright (c) 2015-2021, 2024 by Rocky Bernstein
 #
 #  This program is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -16,18 +16,18 @@
 All the crazy things we have to do to handle Python functions in 3.0-3.5 or so.
 The saga of changes before and after is in other files.
 """
-from xdis import iscode, code_has_star_arg, code_has_star_star_arg, CO_GENERATOR
-from uncompyle6.scanner import Code
-from uncompyle6.parsers.treenode import SyntaxTree
-from uncompyle6.semantics.parser_error import ParserError
+from xdis import CO_GENERATOR, code_has_star_arg, code_has_star_star_arg, iscode
+
 from uncompyle6.parser import ParserError as ParserError2
+from uncompyle6.parsers.treenode import SyntaxTree
+from uncompyle6.scanner import Code
 from uncompyle6.semantics.helper import (
-    print_docstring,
     find_all_globals,
     find_globals_and_nonlocals,
     find_none,
+    print_docstring,
 )
-
+from uncompyle6.semantics.parser_error import ParserError
 from uncompyle6.show import maybe_show_tree_param_default
 
 # FIXME: DRY the below code...
@@ -37,13 +37,13 @@ def make_function3_annotate(
     self, node, is_lambda, nested=1, code_node=None, annotate_last=-1
 ):
     """
-    Dump function defintion, doc string, and function
+    Dump function definition, doc string, and function
     body. This code is specialized for Python 3"""
 
     def build_param(ast, name, default):
         """build parameters:
-            - handle defaults
-            - handle format tuple parameters
+        - handle defaults
+        - handle format tuple parameters
         """
         if default:
             value = self.traverse(default, indent="")
@@ -300,7 +300,7 @@ def make_function3_annotate(
 
 def make_function3(self, node, is_lambda, nested=1, code_node=None):
     """Dump function definition, doc string, and function body in
-      Python version 3.0 and above
+    Python version 3.0 and above
     """
 
     # For Python 3.3, the evaluation stack in MAKE_FUNCTION is:
@@ -310,7 +310,7 @@ def make_function3(self, node, is_lambda, nested=1, code_node=None):
     #   the object on the stack, for keyword-only parameters
     # * parameter annotation objects
     # * a tuple listing the parameter names for the annotations
-    #   (only if there are ony annotation objects)
+    #   (only if there are only annotation objects)
     # * the code associated with the function (at TOS1)
     # * the qualified name of the function (at TOS)
 
@@ -333,11 +333,10 @@ def make_function3(self, node, is_lambda, nested=1, code_node=None):
 
     def build_param(ast, name, default, annotation=None):
         """build parameters:
-            - handle defaults
-            - handle format tuple parameters
+        - handle defaults
+        - handle format tuple parameters
         """
         value = self.traverse(default, indent="")
-        maybe_show_tree_param_default(self.showast, name, value)
         if annotation:
             result = "%s: %s=%s" % (name, annotation, value)
         else:
@@ -419,7 +418,6 @@ def make_function3(self, node, is_lambda, nested=1, code_node=None):
             pass
 
         if len(node) > 2 and (have_kwargs or node[lc_index].kind != "load_closure"):
-
             # Find the index in "node" where the first default
             # parameter value is located. Note this is in contrast to
             # key-word arguments, pairs of (name, value), which appear after "*".
@@ -491,8 +489,6 @@ def make_function3(self, node, is_lambda, nested=1, code_node=None):
         if not self.tolerate_errors:
             self.ERROR = p
         return
-
-    kw_pairs = 0
 
     i = len(paramnames) - len(defparams)
 

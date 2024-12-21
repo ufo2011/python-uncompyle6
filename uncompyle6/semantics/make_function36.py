@@ -1,4 +1,4 @@
-#  Copyright (c) 2019-2021 by Rocky Bernstein
+#  Copyright (c) 2019-2022 by Rocky Bernstein
 #
 #  This program is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -17,34 +17,33 @@ All the crazy things we have to do to handle Python functions in 3.6 and above.
 The saga of changes before 3.6 is in other files.
 """
 from xdis import (
-    iscode,
+    CO_ASYNC_GENERATOR,
+    CO_GENERATOR,
     code_has_star_arg,
     code_has_star_star_arg,
-    CO_GENERATOR,
-    CO_ASYNC_GENERATOR,
+    iscode,
 )
-from uncompyle6.scanner import Code
-from uncompyle6.semantics.parser_error import ParserError
+
 from uncompyle6.parser import ParserError as ParserError2
+from uncompyle6.scanner import Code
 from uncompyle6.semantics.helper import (
     find_all_globals,
     find_globals_and_nonlocals,
     find_none,
 )
-from itertools import zip_longest
-
-from uncompyle6.show import maybe_show_tree_param_default
+from uncompyle6.semantics.parser_error import ParserError
 
 
 def make_function36(self, node, is_lambda, nested=1, code_node=None):
     """Dump function definition, doc string, and function body in
     Python version 3.6 and above.
     """
-    # MAKE_CLOSURE adds an additional closure slot
+
+    # MAKE_CLOSURE adds a closure slot
 
     # In Python 3.6 and above stack change again. I understand
     # 3.7 changes some of those changes, although I don't
-    # see it in this code yet. Yes, it is hard to follow
+    # see it in this code yet. Yes, it is hard to follow,
     # and I am sure I haven't been able to keep up.
 
     # Thank you, Python.
@@ -55,7 +54,6 @@ def make_function36(self, node, is_lambda, nested=1, code_node=None):
         - handle format tuple parameters
         """
         value = default
-        maybe_show_tree_param_default(self.showast, name, value)
         if annotation:
             result = "%s: %s=%s" % (name, annotation, value)
         else:
@@ -86,16 +84,15 @@ def make_function36(self, node, is_lambda, nested=1, code_node=None):
     args_attr = args_node.attr
 
     if len(args_attr) == 3:
-        pos_args, kw_args, annotate_argc = args_attr
+        _, kw_args, annotate_argc = args_attr
     else:
-        pos_args, kw_args, annotate_argc, closure = args_attr
+        _, kw_args, annotate_argc, closure = args_attr
 
     if node[-2] != "docstring":
         i = -4
     else:
         i = -5
 
-    kw_pairs = 0
     if annotate_argc:
         # Turn into subroutine and DRY with other use
         annotate_node = node[i]
@@ -107,9 +104,9 @@ def make_function36(self, node, is_lambda, nested=1, code_node=None):
             ):
                 types = [self.traverse(n, indent="") for n in annotate_node[:-2]]
                 names = annotate_node[-2].attr
-                l = len(types)
-                assert l == len(names)
-                for i in range(l):
+                length = len(types)
+                assert length == len(names)
+                for i in range(length):
                     annotate_dict[names[i]] = types[i]
                 pass
             pass
@@ -119,11 +116,6 @@ def make_function36(self, node, is_lambda, nested=1, code_node=None):
         # FIXME: fill in
         # annotate = node[i]
         i -= 1
-
-    if kw_args:
-        kw_node = node[pos_args]
-        if kw_node == "expr":
-            kw_node = kw_node[0]
 
     defparams = []
     # FIXME: DRY with code below
@@ -162,7 +154,7 @@ def make_function36(self, node, is_lambda, nested=1, code_node=None):
     defparams.reverse()
 
     try:
-        ast = self.build_ast(
+        tree = self.build_ast(
             scanner_code._tokens,
             scanner_code._customize,
             scanner_code,
@@ -183,7 +175,7 @@ def make_function36(self, node, is_lambda, nested=1, code_node=None):
         for i, defparam in enumerate(defparams):
             params.append(
                 build_param(
-                    ast, paramnames[i], defparam, annotate_dict.get(paramnames[i])
+                    tree, paramnames[i], defparam, annotate_dict.get(paramnames[i])
                 )
             )
 
@@ -212,7 +204,13 @@ def make_function36(self, node, is_lambda, nested=1, code_node=None):
 
     # dump parameter list (with default values)
     if is_lambda:
-        self.write("lambda ", ", ".join(params))
+        self.write("lambda")
+        if len(params):
+            self.write(" ", ", ".join(params))
+        elif kwonlyargcount > 0 and not (4 & code.co_flags):
+            assert argc == 0
+            self.write(" ")
+
         # If the last statement is None (which is the
         # same thing as "return None" in a lambda) and the
         # next to last statement is a "yield". Then we want to
@@ -220,16 +218,16 @@ def make_function36(self, node, is_lambda, nested=1, code_node=None):
         # to have something to after the yield finishes.
         # FIXME: this is a bit hoaky and not general
         if (
-            len(ast) > 1
-            and self.traverse(ast[-1]) == "None"
-            and self.traverse(ast[-2]).strip().startswith("yield")
+            len(tree) > 1
+            and self.traverse(tree[-1]) == "None"
+            and self.traverse(tree[-2]).strip().startswith("yield")
         ):
-            del ast[-1]
+            del tree[-1]
             # Now pick out the expr part of the last statement
-            ast_expr = ast[-1]
-            while ast_expr.kind != "expr":
-                ast_expr = ast_expr[0]
-            ast[-1] = ast_expr
+            tree_expr = tree[-1]
+            while tree_expr.kind != "expr":
+                tree_expr = tree_expr[0]
+            tree[-1] = tree_expr
             pass
     else:
         self.write("(", ", ".join(params))
@@ -237,19 +235,19 @@ def make_function36(self, node, is_lambda, nested=1, code_node=None):
 
     ends_in_comma = False
     if kwonlyargcount > 0:
-        if not (4 & code.co_flags):
+        if not 4 & code.co_flags:
             if argc > 0:
                 self.write(", *, ")
             else:
                 self.write("*, ")
             pass
-            ends_in_comma = True
         else:
             if argc > 0:
                 self.write(", ")
-                ends_in_comma = True
 
-        ann_dict = kw_dict = default_tup = None
+        # ann_dict = kw_dict = default_tup = None
+        kw_dict = None
+
         fn_bits = node[-1].attr
         # Skip over:
         #  MAKE_FUNCTION,
@@ -299,7 +297,7 @@ def make_function36(self, node, is_lambda, nested=1, code_node=None):
                 pass
             pass
         # handle others
-        other_kw = [c == None for c in kw_args]
+        other_kw = [c is None for c in kw_args]
 
         for i, flag in enumerate(other_kw):
             if flag:
@@ -337,11 +335,11 @@ def make_function36(self, node, is_lambda, nested=1, code_node=None):
         # docstring exists, dump it
         self.println(self.traverse(node[-2]))
 
-    assert ast == "stmts"
+    assert tree in ("stmts", "lambda_start")
 
-    all_globals = find_all_globals(ast, set())
+    all_globals = find_all_globals(tree, set())
     globals, nonlocals = find_globals_and_nonlocals(
-        ast, set(), set(), code, self.version
+        tree, set(), set(), code, self.version
     )
 
     for g in sorted((all_globals & self.mod_globs) | globals):
@@ -352,9 +350,9 @@ def make_function36(self, node, is_lambda, nested=1, code_node=None):
 
     self.mod_globs -= all_globals
     has_none = "None" in code.co_names
-    rn = has_none and not find_none(ast)
+    rn = has_none and not find_none(tree)
     self.gen_source(
-        ast,
+        tree,
         code.co_name,
         scanner_code._customize,
         is_lambda=is_lambda,

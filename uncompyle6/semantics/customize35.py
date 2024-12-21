@@ -1,4 +1,4 @@
-#  Copyright (c) 2019-2020 by Rocky Bernstein
+#  Copyright (c) 2019-2020, 2022, 2024 by Rocky Bernstein
 #
 #  This program is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -16,32 +16,29 @@
 """
 
 from xdis import co_flags_is_async, iscode
-from uncompyle6.semantics.consts import (
-    INDENT_PER_LEVEL,
-    PRECEDENCE,
-    TABLE_DIRECT,
-)
 
+from uncompyle6.semantics.consts import INDENT_PER_LEVEL, PRECEDENCE, TABLE_DIRECT
 from uncompyle6.semantics.helper import flatten_list, gen_function_parens_adjust
+
 
 #######################
 # Python 3.5+ Changes #
 #######################
-def customize_for_version35(self, version):
+def customize_for_version35(self, version: tuple):
     # fmt: off
-    TABLE_DIRECT.update(
+    self.TABLE_DIRECT.update(
         {
             # nested await expressions like:
             #   return await (await bar())
             # need parenthesis.
-            "await_expr": ("await %p", (0, PRECEDENCE["await_expr"]-1)),
+            "await_expr": ("await %p", (0, PRECEDENCE["await_expr"] - 1)),
 
             "await_stmt": ("%|%c\n", 0),
             "async_for_stmt": (
                 "%|async for %c in %c:\n%+%|%c%-\n\n",
                 (9, "store"),
                 (1, "expr"),
-                (25, "for_block"),
+                (25, ("for_block", "pass")),
             ),
             "async_forelse_stmt": (
                 "%|async for %c in %c:\n%+%c%-%|else:\n%+%c%-\n\n",
@@ -65,6 +62,7 @@ def customize_for_version35(self, version):
             # "unmapexpr":	       ( "{**%c}", 0), # done by n_unmapexpr
         }
     )
+
     # fmt: on
 
     def async_call(node):
@@ -97,6 +95,8 @@ def customize_for_version35(self, version):
         if lastnodetype.startswith("BUILD_LIST"):
             self.write("[")
             endchar = "]"
+        else:
+            endchar = ""
 
         flat_elems = flatten_list(node)
 
@@ -193,7 +193,11 @@ def customize_for_version35(self, version):
                 self.template_engine(template, args_node)
             else:
                 if len(node) - nargs > 3:
-                    template = ("*%c, %P)", nargs + 1, (nargs + kwargs + 1, -1, ", ", 100))
+                    template = (
+                        "*%c, %P)",
+                        nargs + 1,
+                        (nargs + kwargs + 1, -1, ", ", 100),
+                    )
                 else:
                     template = ("*%c)", nargs + 1)
                 self.template_engine(template, node)

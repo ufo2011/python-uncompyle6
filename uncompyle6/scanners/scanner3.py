@@ -1,4 +1,4 @@
-#  Copyright (c) 2015-2019, 2021-2022 by Rocky Bernstein
+#  Copyright (c) 2015-2019, 2021-2024 by Rocky Bernstein
 #  Copyright (c) 2005 by Dan Pascu <dan@windowmaker.org>
 #  Copyright (c) 2000-2002 by hartmut Goebel <h.goebel@crazy-compilers.com>
 #
@@ -35,21 +35,20 @@ Finally we save token information.
 
 from __future__ import print_function
 
+import sys
 from typing import Optional, Tuple
 
-from xdis import iscode, instruction_size, Instruction
-from xdis.bytecode import _get_const_info
-
-from uncompyle6.scanners.tok import Token
-from uncompyle6.scanner import parse_fn_counts
 import xdis
 
 # Get all the opcodes into globals
 import xdis.opcodes.opcode_33 as op3
+from xdis import Instruction, instruction_size, iscode
+from xdis.bytecode import _get_const_info
+from xdis.opcodes.opcode_3x import parse_fn_counts_30_35
 
-from uncompyle6.scanner import Scanner, CONST_COLLECTIONS
-
-import sys
+from uncompyle6.scanner import CONST_COLLECTIONS, Scanner
+from uncompyle6.scanners.tok import Token
+from uncompyle6.util import get_code_name
 
 intern = sys.intern
 
@@ -61,7 +60,7 @@ class Scanner3(Scanner):
         super(Scanner3, self).__init__(version, show_asm, is_pypy)
 
         # Create opcode classification sets
-        # Note: super initilization above initializes self.opc
+        # Note: super initialization above initializes self.opc
 
         # For ops that start SETUP_ ... we will add COME_FROM with these names
         # at the their targets.
@@ -208,11 +207,18 @@ class Scanner3(Scanner):
         return
 
     def bound_collection_from_inst(
-        self, insts: list, next_tokens: list, inst: Instruction, t: Token, i: int, collection_type: str
+        self,
+        insts: list,
+        next_tokens: list,
+        inst: Instruction,
+        t: Token,
+        i: int,
+        collection_type: str,
     ) -> Optional[list]:
         """
-        Try to a replace sequence of instruction that ends with a BUILD_xxx with a sequence that can
-        be parsed much faster, but inserting the token boundary at the beginning of the sequence.
+        Try to replace a sequence of instruction that ends with a
+        BUILD_xxx with a sequence that can be parsed much faster, but
+        inserting the token boundary at the beginning of the sequence.
         """
         count = t.attr
         assert isinstance(count, int)
@@ -220,7 +226,7 @@ class Scanner3(Scanner):
         assert count <= i
 
         if collection_type == "CONST_DICT":
-            # constant dictonaries work via BUILD_CONST_KEY_MAP and
+            # constant dictionaries work via BUILD_CONST_KEY_MAP and
             # handle the values() like sets and lists.
             # However the keys() are an LOAD_CONST of the keys.
             # adjust offset to account for this
@@ -260,6 +266,7 @@ class Scanner3(Scanner):
                 has_arg=True,
                 has_extended_arg=False,
                 opc=self.opc,
+                optype="pseudo",
             )
         )
         for j in range(collection_start, i):
@@ -273,6 +280,7 @@ class Scanner3(Scanner):
                     has_arg=True,
                     has_extended_arg=False,
                     opc=self.opc,
+                    optype=insts[j].optype,
                 )
             )
         new_tokens.append(
@@ -285,15 +293,19 @@ class Scanner3(Scanner):
                 has_arg=t.has_arg,
                 has_extended_arg=False,
                 opc=t.opc,
+                optype="pseudo",
             )
         )
         return new_tokens
 
-    def bound_map_from_inst(
-        self, insts: list, next_tokens: list, inst: Instruction, t: Token, i: int) -> Optional[list]:
+    # Move to scanner35?
+    def bound_map_from_inst_35(
+        self, insts: list, next_tokens: list, t: Token, i: int
+    ) -> Optional[list]:
         """
-        Try to a sequence of instruction that ends with a BUILD_MAP into a sequence that can
-        be parsed much faster, but inserting the token boundary at the beginning of the sequence.
+        Try to a sequence of instruction that ends with a BUILD_MAP into
+        a sequence that can be parsed much faster, but inserting the
+        token boundary at the beginning of the sequence.
         """
         count = t.attr
         assert isinstance(count, int)
@@ -304,25 +316,24 @@ class Scanner3(Scanner):
         if count < 5:
             return None
 
+        # Newer Python BUILD_MAP argument's count is a
+        # key and value pair so it is multiplied by two.
         collection_start = i - (count * 2)
         assert (count * 2) <= i
 
         for j in range(collection_start, i, 2):
-            if insts[j].opname not in (
-                "LOAD_CONST",
-            ):
+            if insts[j].opname not in ("LOAD_CONST",):
                 return None
-            if insts[j+1].opname not in (
-                "LOAD_CONST",
-            ):
+            if insts[j + 1].opname not in ("LOAD_CONST",):
                 return None
 
         collection_start = i - (2 * count)
         collection_enum = CONST_COLLECTIONS.index("CONST_MAP")
 
-        # If we get here, all instructions before tokens[i] are LOAD_CONST and we can replace
-        # add a boundary marker and change LOAD_CONST to something else
-        new_tokens = next_tokens[:-(2*count)]
+        # If we get here, all instructions before tokens[i] are LOAD_CONST and
+        # we can replace add a boundary marker and change LOAD_CONST to
+        # something else.
+        new_tokens = next_tokens[: -(2 * count)]
         start_offset = insts[collection_start].offset
         new_tokens.append(
             Token(
@@ -330,10 +341,11 @@ class Scanner3(Scanner):
                 attr=collection_enum,
                 pattr="CONST_MAP",
                 offset=f"{start_offset}_0",
-                linestart=False,
+                linestart=insts[collection_start].starts_line,
                 has_arg=True,
                 has_extended_arg=False,
                 opc=self.opc,
+                optype="pseudo",
             )
         )
         for j in range(collection_start, i, 2):
@@ -347,23 +359,25 @@ class Scanner3(Scanner):
                     has_arg=True,
                     has_extended_arg=False,
                     opc=self.opc,
+                    optype="pseudo",
                 )
             )
             new_tokens.append(
                 Token(
                     opname="ADD_VALUE",
-                    attr=insts[j+1].argval,
-                    pattr=insts[j+1].argrepr,
-                    offset=insts[j+1].offset,
-                    linestart=insts[j+1].starts_line,
+                    attr=insts[j + 1].argval,
+                    pattr=insts[j + 1].argrepr,
+                    offset=insts[j + 1].offset,
+                    linestart=insts[j + 1].starts_line,
                     has_arg=True,
                     has_extended_arg=False,
                     opc=self.opc,
+                    optype="pseudo",
                 )
             )
         new_tokens.append(
             Token(
-                opname=f"BUILD_DICT_OLDER",
+                opname="BUILD_DICT_OLDER",
                 attr=t.attr,
                 pattr=t.pattr,
                 offset=t.offset,
@@ -371,12 +385,14 @@ class Scanner3(Scanner):
                 has_arg=t.has_arg,
                 has_extended_arg=False,
                 opc=t.opc,
+                optype="pseudo",
             )
         )
         return new_tokens
 
-    def ingest(self, co, classname=None, code_objects={}, show_asm=None
-        ) -> Tuple[list, dict]:
+    def ingest(
+        self, co, classname=None, code_objects={}, show_asm=None
+    ) -> Tuple[list, dict]:
         """
         Create "tokens" the bytecode of an Python code object. Largely these
         are the opcode name, but in some cases that has been modified to make parsing
@@ -386,14 +402,17 @@ class Scanner3(Scanner):
         Some transformations are made to assist the deparsing grammar:
            -  various types of LOAD_CONST's are categorized in terms of what they load
            -  COME_FROM instructions are added to assist parsing control structures
-           -  operands with stack argument counts or flag masks are appended to the opcode name, e.g.:
+           -  operands with stack argument counts or flag masks are appended to the
+              opcode name, e.g.:
               *  BUILD_LIST, BUILD_SET
-              *  MAKE_FUNCTION and FUNCTION_CALLS append the number of positional arguments
+              *  MAKE_FUNCTION and FUNCTION_CALLS append the number of positional
+                 arguments
            -  EXTENDED_ARGS instructions are removed
 
-        Also, when we encounter certain tokens, we add them to a set which will cause custom
-        grammar rules. Specifically, variable arg tokens like MAKE_FUNCTION or BUILD_LIST
-        cause specific rules for the specific number of arguments they take.
+        Also, when we encounter certain tokens, we add them to a set
+        which will cause custom grammar rules. Specifically, variable
+        arg tokens like MAKE_FUNCTION or BUILD_LIST cause specific rules
+        for the specific number of arguments they take.
         """
 
         if not show_asm:
@@ -403,8 +422,16 @@ class Scanner3(Scanner):
 
         # show_asm = 'both'
         if show_asm in ("both", "before"):
-            for instr in bytecode.get_instructions(co):
-                print(instr.disassemble())
+            print("\n# ---- disassembly:")
+            bytecode.disassemble_bytes(
+                co.co_code,
+                varnames=co.co_varnames,
+                names=co.co_names,
+                constants=co.co_consts,
+                cells=bytecode._cell_names,
+                line_starts=bytecode._linestarts,
+                asm_format="extended",
+            )
 
         # "customize" is in the process of going away here
         customize = {}
@@ -419,7 +446,6 @@ class Scanner3(Scanner):
 
         n = len(self.insts)
         for i, inst in enumerate(self.insts):
-
             opname = inst.opname
             # We need to detect the difference between:
             #   raise AssertionError
@@ -436,12 +462,12 @@ class Scanner3(Scanner):
                     prev_inst = self.insts[i - 1]
                     assert_can_follow = (
                         prev_inst.opname in ("JUMP_IF_TRUE", "JUMP_IF_FALSE")
-                        and i + 1 < n )
+                        and i + 1 < n
+                    )
                     jump_if_inst = prev_inst
             else:
                 assert_can_follow = (
-                    opname in ("POP_JUMP_IF_TRUE", "POP_JUMP_IF_FALSE")
-                    and i + 1 < n
+                    opname in ("POP_JUMP_IF_TRUE", "POP_JUMP_IF_FALSE") and i + 1 < n
                 )
                 jump_if_inst = inst
             if assert_can_follow:
@@ -451,7 +477,9 @@ class Scanner3(Scanner):
                     and next_inst.argval == "AssertionError"
                     and jump_if_inst.argval
                 ):
-                    raise_idx = self.offset2inst_index[self.prev_op[jump_if_inst.argval]]
+                    raise_idx = self.offset2inst_index[
+                        self.prev_op[jump_if_inst.argval]
+                    ]
                     raise_inst = self.insts[raise_idx]
                     if raise_inst.opname.startswith("RAISE_VARARGS"):
                         self.load_asserts.add(next_inst.offset)
@@ -466,23 +494,31 @@ class Scanner3(Scanner):
         last_op_was_break = False
         new_tokens = []
 
+        skip_end_offset = None
+
         for i, inst in enumerate(self.insts):
+            # BUILD_MAP for < 3.5 can skip *forward* in instructions and
+            # replace them. So we use the below to get up to the position
+            # scanned and replaced forward
+            if skip_end_offset and inst.offset <= skip_end_offset:
+                continue
+            skip_end_offset = None
 
             opname = inst.opname
             argval = inst.argval
             pattr = inst.argrepr
 
             t = Token(
-                    opname=opname,
-                    attr=argval,
-                    pattr=pattr,
-                    offset=inst.offset,
-                    linestart=inst.starts_line,
-                    op=inst.opcode,
-                    has_arg=inst.has_arg,
-                    has_extended_arg=inst.has_extended_arg,
-                    opc=self.opc,
-                )
+                opname=opname,
+                attr=argval,
+                pattr=pattr,
+                offset=inst.offset,
+                linestart=inst.starts_line,
+                op=inst.opcode,
+                has_arg=inst.has_arg,
+                has_extended_arg=inst.has_extended_arg,
+                opc=self.opc,
+            )
 
             # things that smash new_tokens like BUILD_LIST have to come first.
             if opname in (
@@ -501,24 +537,29 @@ class Scanner3(Scanner):
                 if try_tokens is not None:
                     new_tokens = try_tokens
                     continue
-            elif opname in (
-                "BUILD_MAP",
-            ):
-                try_tokens = self.bound_map_from_inst(
-                    self.insts, new_tokens, inst, t, i,
-                )
-                if try_tokens is not None:
-                    new_tokens = try_tokens
-                    continue
+
+            elif opname in ("BUILD_MAP",):
+                if self.version >= (3, 5):
+                    try_tokens = self.bound_map_from_inst_35(
+                        self.insts,
+                        new_tokens,
+                        t,
+                        i,
+                    )
+                    if try_tokens is not None:
+                        new_tokens = try_tokens
+                        continue
+                        pass
+                    pass
+                pass
 
             argval = inst.argval
             op = inst.opcode
 
             if opname == "EXTENDED_ARG":
-                # FIXME: The EXTENDED_ARG is used to signal annotation
-                # parameters
-                if i + 1 < n and self.insts[i + 1].opcode != self.opc.MAKE_FUNCTION:
-                    continue
+                # EXTEND_ARG adjustments to the operand value should have
+                # already been accounted for in xdis instruction creation.
+                continue
 
             if inst.offset in jump_targets:
                 jump_idx = 0
@@ -572,16 +613,17 @@ class Scanner3(Scanner):
             if op in self.opc.CONST_OPS:
                 const = argval
                 if iscode(const):
-                    if const.co_name == "<lambda>":
+                    co_name = get_code_name(const)
+                    if co_name == "<lambda>":
                         assert opname == "LOAD_CONST"
                         opname = "LOAD_LAMBDA"
-                    elif const.co_name == "<genexpr>":
+                    elif co_name == "<genexpr>":
                         opname = "LOAD_GENEXPR"
-                    elif const.co_name == "<dictcomp>":
+                    elif co_name == "<dictcomp>":
                         opname = "LOAD_DICTCOMP"
-                    elif const.co_name == "<setcomp>":
+                    elif co_name == "<setcomp>":
                         opname = "LOAD_SETCOMP"
-                    elif const.co_name == "<listcomp>":
+                    elif co_name == "<listcomp>":
                         opname = "LOAD_LISTCOMP"
                     else:
                         opname = "LOAD_CODE"
@@ -589,8 +631,8 @@ class Scanner3(Scanner):
                     # now holds Code(const) and thus can not be used
                     # for comparison (todo: think about changing this)
                     # pattr = 'code_object @ 0x%x %s->%s' %\
-                    # (id(const), const.co_filename, const.co_name)
-                    pattr = "<code_object " + const.co_name + ">"
+                    # (id(const), const.co_filename, co_name)
+                    pattr = "<code_object " + co_name + ">"
                 elif isinstance(const, str):
                     opname = "LOAD_STR"
                 else:
@@ -623,23 +665,29 @@ class Scanner3(Scanner):
                         flags >>= 1
                     attr = attr[:4]  # remove last value: attr[5] == False
                 else:
-                    pos_args, name_pair_args, annotate_args = parse_fn_counts(
+                    pos_args, name_pair_args, annotate_args = parse_fn_counts_30_35(
                         inst.argval
                     )
-                    pattr = "%d positional, %d keyword only, %d annotated" % (
-                        pos_args,
-                        name_pair_args,
-                        annotate_args,
-                    )
-                    if name_pair_args > 0:
+
+                    pattr = f"{pos_args} positional, {name_pair_args} keyword only, {annotate_args} annotated"
+
+                    if name_pair_args > 0 and annotate_args > 0:
                         # FIXME: this should probably be K_
-                        opname = "%s_N%d" % (opname, name_pair_args)
+                        opname += f"_N{name_pair_args}_A{annotate_args}"
                         pass
-                    if annotate_args > 0:
-                        opname = "%s_A_%d" % (opname, annotate_args)
+                    elif annotate_args > 0:
+                        opname += f"_A_{annotate_args}"
                         pass
-                    opname = "%s_%d" % (opname, pos_args)
+                    elif name_pair_args > 0:
+                        opname += f"_N_{name_pair_args}"
+                        pass
+                    else:
+                        # Rule customization mathics, MAKE_FUNCTION_...
+                        # so make sure to add the "_"
+                        opname += "_0"
+
                     attr = (pos_args, name_pair_args, annotate_args)
+
                 new_tokens.append(
                     Token(
                         opname=opname,
@@ -705,11 +753,13 @@ class Scanner3(Scanner):
                         and self.insts[i + 1].opname == "JUMP_FORWARD"
                     )
 
-                    if (self.version[:2] == (3, 0) and self.insts[i + 1].opname == "JUMP_FORWARD"
-                        and not is_continue):
+                    if (
+                        self.version[:2] == (3, 0)
+                        and self.insts[i + 1].opname == "JUMP_FORWARD"
+                        and not is_continue
+                    ):
                         target_prev = self.offset2inst_index[self.prev_op[target]]
-                        is_continue = (
-                            self.insts[target_prev].opname == "SETUP_LOOP")
+                        is_continue = self.insts[target_prev].opname == "SETUP_LOOP"
 
                     if is_continue or (
                         inst.offset in self.stmts
@@ -726,7 +776,10 @@ class Scanner3(Scanner):
                         # the "continue" is not on a new line.
                         # There are other situations where we don't catch
                         # CONTINUE as well.
-                        if new_tokens[-1].kind == "JUMP_BACK" and new_tokens[-1].attr <= argval:
+                        if (
+                            new_tokens[-1].kind == "JUMP_BACK"
+                            and new_tokens[-1].attr <= argval
+                        ):
                             if new_tokens[-2].kind == "BREAK_LOOP":
                                 del new_tokens[-1]
                             else:
@@ -752,7 +805,9 @@ class Scanner3(Scanner):
             pass
 
         if show_asm in ("both", "after"):
-            for t in new_tokens:
+            print("\n# ---- tokenization:")
+            # FIXME: t.format() is changing tokens!
+            for t in new_tokens.copy():
                 print(t.format(line_prefix=""))
             print()
         return new_tokens, customize
@@ -799,7 +854,10 @@ class Scanner3(Scanner):
             if inst.has_arg:
                 label = self.fixed_jumps.get(offset)
                 oparg = inst.arg
-                if self.version >= (3, 6) and self.code[offset] == self.opc.EXTENDED_ARG:
+                if (
+                    self.version >= (3, 6)
+                    and self.code[offset] == self.opc.EXTENDED_ARG
+                ):
                     j = xdis.next_offset(op, self.opc, offset)
                     next_offset = xdis.next_offset(op, self.opc, j)
                 else:
@@ -1072,7 +1130,6 @@ class Scanner3(Scanner):
                 and (target > offset)
                 and pretarget.offset != offset
             ):
-
                 # FIXME: hack upon hack...
                 # In some cases the pretarget can be a jump to the next instruction
                 # and these aren't and/or's either. We limit to 3.5+ since we experienced there
@@ -1094,8 +1151,7 @@ class Scanner3(Scanner):
 
             # Is it an "and" inside an "if" or "while" block
             if op == self.opc.POP_JUMP_IF_FALSE:
-
-                # Search for another POP_JUMP_IF_FALSE targetting the same op,
+                # Search for another POP_JUMP_IF_FALSE targeting the same op,
                 # in current statement, starting from current offset, and filter
                 # everything inside inner 'or' jumps and midline ifs
                 match = self.rem_or(
@@ -1302,7 +1358,7 @@ class Scanner3(Scanner):
                 self.not_continue.add(pre_rtarget)
             elif code[pre_rtarget] in rtarget_break:
                 self.structs.append({"type": "if-then", "start": start, "end": rtarget})
-                # It is important to distingish if this return is inside some sort
+                # It is important to distinguish if this return is inside some sort
                 # except block return
                 jump_prev = prev_op[offset]
                 if self.is_pypy and code[jump_prev] == self.opc.COMPARE_OP:
@@ -1347,7 +1403,6 @@ class Scanner3(Scanner):
                     self.fixed_jumps[offset] = rtarget
                     self.not_continue.add(pre_rtarget)
             else:
-
                 # FIXME: this is very convoluted and based on rather hacky
                 # empirical evidence. It should go a way when
                 # we have better control-flow analysis

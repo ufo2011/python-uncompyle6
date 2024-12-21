@@ -1,4 +1,4 @@
-#  Copyright (c) 2019-2022 by Rocky Bernstein
+#  Copyright (c) 2019-2024 by Rocky Bernstein
 #
 #  This program is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -16,18 +16,16 @@
 """
 
 import re
-from uncompyle6.semantics.consts import (
-    PRECEDENCE,
-    TABLE_DIRECT,
-    INDENT_PER_LEVEL,
-)
 
+from uncompyle6.semantics.consts import INDENT_PER_LEVEL, PRECEDENCE
 from uncompyle6.semantics.helper import flatten_list
 
+# FIXME get from a newer xdis
 FSTRING_CONVERSION_MAP = {1: "!s", 2: "!r", 3: "!a", "X": ":X"}
 
+
 #######################
-def customize_for_version37(self, version):
+def customize_for_version37(self, version: tuple):
     ########################
     # Python 3.7+ changes
     #######################
@@ -41,22 +39,25 @@ def customize_for_version37(self, version):
     PRECEDENCE["call_ex_kw4"]      =   1
     PRECEDENCE["call_kw"]          =   0
     PRECEDENCE["call_kw36"]        =   1
-    PRECEDENCE["formatted_value1"] =  38 # f"...". This has to be below "named_expr" to make
-                                         # f'{(x := 10)}' preserve parenthesis
-    PRECEDENCE["formatted_value2"] =  38 # See above
+    PRECEDENCE["formatted_value1"] =  38  # f"...". This has to be below "named_expr" to make
+                                          # f'{(x := 10)}' preserve parenthesis
+    PRECEDENCE["formatted_value2"] =  38  # See above
     PRECEDENCE["if_exp_37a"]       =  28
     PRECEDENCE["if_exp_37b"]       =  28
     PRECEDENCE["dict_unpack"]      =   0  # **{...}
 
     # fmt: on
-    TABLE_DIRECT.update(
+    self.TABLE_DIRECT.update(
         {
             "and_not": ("%c and not %c", (0, "expr"), (2, "expr")),
             "ann_assign": (
-                "%|%[2]{attr}: %c\n", 0,
+                "%|%[2]{attr}: %c\n",
+                0,
             ),
             "ann_assign_init": (
-                "%|%[2]{attr}: %c = %c\n", 0, 1,
+                "%|%[2]{attr}: %c = %c\n",
+                0,
+                1,
             ),
             "async_for_stmt": (
                 "%|async for %c in %c:\n%+%c%-\n\n",
@@ -68,7 +69,7 @@ def customize_for_version37(self, version):
                 "%|async for %c in %c:\n%+%c%-\n\n",
                 (8, "store"),
                 (1, "expr"),
-                (17, "for_block"),
+                (17, ("for_block", "pass")),
             ),
             "async_with_stmt": ("%|async with %c:\n%+%c%-", (0, "expr"), 3),
             "async_with_as_stmt": (
@@ -85,56 +86,63 @@ def customize_for_version37(self, version):
                 (-2, "else_suite"),
             ),
             "attribute37": ("%c.%[1]{pattr}", (0, "expr")),
-            "attributes37": ("%[0]{pattr} import %c",
-                            (0, "IMPORT_NAME_ATTR"),
-                            (1, "IMPORT_FROM")),
-
+            "attributes37": (
+                "%[0]{pattr} import %c",
+                (0, "IMPORT_NAME_ATTR"),
+                (1, "IMPORT_FROM"),
+            ),
             # nested await expressions like:
             #   return await (await bar())
             # need parenthesis.
             # Note there are async dictionary expressions are like await expr's
             # the below is just the default fersion
-            "await_expr": ("await %p", (0, PRECEDENCE["await_expr"]-1)),
-
+            "await_expr": ("await %p", (0, PRECEDENCE["await_expr"] - 1)),
             "await_stmt": ("%|%c\n", 0),
             "c_async_with_stmt": ("%|async with %c:\n%+%c%-", (0, "expr"), 3),
             "call_ex": ("%c(%p)", (0, "expr"), (1, 100)),
-            "compare_chained1a_37": (
+            "compared_chained_middlea_37": (
                 ' %[3]{pattr.replace("-", " ")} %p %p',
                 (0, PRECEDENCE["compare"] - 1),
                 (-4, PRECEDENCE["compare"] - 1),
             ),
-            "compare_chained1_false_37": (
+            "compared_chained_middle_false_37": (
                 ' %[3]{pattr.replace("-", " ")} %p %p',
                 (0, PRECEDENCE["compare"] - 1),
                 (-4, PRECEDENCE["compare"] - 1),
             ),
-            "compare_chained2_false_37": (
+            "compare_chained_right_false_37": (
                 ' %[3]{pattr.replace("-", " ")} %p %p',
                 (0, PRECEDENCE["compare"] - 1),
                 (-5, PRECEDENCE["compare"] - 1),
             ),
-            "compare_chained1b_false_37": (
+            "compared_chained_middleb_false_37": (
                 ' %[3]{pattr.replace("-", " ")} %p %p',
                 (0, PRECEDENCE["compare"] - 1),
                 (-4, PRECEDENCE["compare"] - 1),
             ),
-            "compare_chained1c_37": (
+            "compared_chained_middlec_37": (
                 ' %[3]{pattr.replace("-", " ")} %p %p',
                 (0, PRECEDENCE["compare"] - 1),
                 (-2, PRECEDENCE["compare"] - 1),
             ),
-            "compare_chained2a_37": ('%[1]{pattr.replace("-", " ")} %p', (0, PRECEDENCE["compare"] - 1)),
-            "compare_chained2b_false_37": ('%[1]{pattr.replace("-", " ")} %p', (0, PRECEDENCE["compare"] - 1)),
-            "compare_chained2a_false_37": ('%[1]{pattr.replace("-", " ")} %p', (0, PRECEDENCE["compare"] - 1)),
-            "compare_chained2c_37": (
+            "compare_chained_righta_37": (
+                '%[1]{pattr.replace("-", " ")} %p',
+                (0, PRECEDENCE["compare"] - 1),
+            ),
+            "compare_chained_rightb_false_37": (
+                '%[1]{pattr.replace("-", " ")} %p',
+                (0, PRECEDENCE["compare"] - 1),
+            ),
+            "compare_chained_righta_false_37": (
+                '%[1]{pattr.replace("-", " ")} %p',
+                (0, PRECEDENCE["compare"] - 1),
+            ),
+            "compare_chained_rightc_37": (
                 '%[3]{pattr.replace("-", " ")} %p %p',
                 (0, PRECEDENCE["compare"] - 1),
                 (6, PRECEDENCE["compare"] - 1),
             ),
-            'if_exp37': ( '%p if %c else %c',
-                          (1, 'expr', 27), 0, 3 ),
-
+            "if_exp37": ("%p if %c else %c", (1, "expr", 27), 0, 3),
             "except_return": ("%|except:\n%+%c%-", 3),
             "if_exp_37a": (
                 "%p if %p else %p",
@@ -149,14 +157,17 @@ def customize_for_version37(self, version):
                 (5, "expr", 27),
             ),
             "ifstmtl": ("%|if %c:\n%+%c%-", (0, "testexpr"), (1, "_ifstmts_jumpl")),
-            'import_as37':     ( '%|import %c as %c\n', 2, -2),
+            "import_as37": ("%|import %c as %c\n", 2, -2),
             "import_from37": ("%|from %[2]{pattr} import %c\n", (3, "importlist37")),
             "import_from_as37": (
                 "%|from %c as %c\n",
                 (2, "import_from_attr37"),
                 (3, "store"),
             ),
-            "import_one": ("%c", (0, "importlists"),),
+            "import_one": (
+                "%c",
+                (0, "importlists"),
+            ),
             "importattr37": ("%c", (0, "IMPORT_NAME_ATTR")),
             "import_from_attr37": (
                 "%c import %c",
@@ -165,19 +176,15 @@ def customize_for_version37(self, version):
             ),
             "list_afor": (
                 " async for %[1]{%c} in %c%[1]{%c}",
-                (1, "store"), (0, "get_aiter"), (3, "list_iter"),
+                (1, "store"),
+                (0, "get_aiter"),
+                (3, "list_iter"),
             ),
-
-            "list_afor": (
-                " async for %[1]{%c} in %c%[1]{%c}",
-                (1, "store"), (0, "get_aiter"), (3, "list_iter"),
-            ),
-
             "list_if37": (" if %p%c", (0, 27), 1),
             "list_if37_not": (" if not %p%c", (0, 27), 1),
             "testfalse_not_or": ("not %c or %c", (0, "expr"), (2, "expr")),
             "testfalse_not_and": ("not (%c)", 0),
-            "testfalsel":  ("not %c", (0, "expr")),
+            "testfalsel": ("not %c", (0, "expr")),
             "try_except36": ("%|try:\n%+%c%-%c\n\n", 1, -2),
             "tryfinally36": ("%|try:\n%+%c%-%|finally:\n%+%c%-\n\n", (1, "returns"), 3),
             "dict_unpack": ("{**%C}", (0, -1, ", **")),
@@ -215,12 +222,12 @@ def customize_for_version37(self, version):
 
     def n_async_call(node):
         self.f.write("async ")
-        node.kind == "call"
+        node.kind = "call"
         p = self.prec
         self.prec = 80
         self.template_engine(("%c(%P)", 0, (1, -4, ", ", 100)), node)
         self.prec = p
-        node.kind == "async_call"
+        node.kind = "async_call"
         self.prune()
 
     self.n_async_call = n_async_call
@@ -257,6 +264,8 @@ def customize_for_version37(self, version):
         if lastnodetype.startswith("BUILD_LIST"):
             self.write("[")
             endchar = "]"
+        else:
+            endchar = ""
 
         flat_elems = flatten_list(node)
 
@@ -408,12 +417,17 @@ def customize_for_version37(self, version):
     self.n_call = n_call
 
     def n_compare_chained(node):
-        if node[0] == "compare_chained37":
+        if node[0] in (
+            "c_compare_chained37",
+            "c_compare_chained37_false",
+            "compare_chained37",
+            "compare_chained37_false",
+        ):
             self.default(node[0])
         else:
             self.default(node)
 
-    self.n_compare_chained = n_compare_chained
+    self.n_compare_chained = self.n_c_compare_chained = n_compare_chained
 
     def n_importlist37(node):
         if len(node) == 1:
@@ -439,3 +453,26 @@ def customize_for_version37(self, version):
         self.prune()
 
     self.n_list_comp_async = n_list_comp_async
+
+    # FIXME: The following adjusts I guess a bug in the parser.
+    # It might be as simple as renaming grammar symbol "testtrue" to "testtrue_or_false"
+    # and then keeping this as is with the name change.
+    # Fixing in the parsing by inspection is harder than doing it here.
+    def n_testtrue(node):
+        compare_chained37 = node[0]
+        if (
+            compare_chained37 == "compare_chained37"
+            and compare_chained37[1] == "compared_chained_middleb_37"
+        ):
+            compared_chained_middleb_37 = compare_chained37[1]
+            if (
+                len(compared_chained_middleb_37) > 2
+                and compared_chained_middleb_37[-2] == "JUMP_FORWARD"
+            ):
+                node.kind = "testfalse"
+                pass
+            pass
+        self.default(node)
+        return
+
+    self.n_testtrue = n_testtrue

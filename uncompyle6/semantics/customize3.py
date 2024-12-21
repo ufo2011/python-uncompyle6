@@ -1,4 +1,4 @@
-#  Copyright (c) 2018-2021 by Rocky Bernstein
+#  Copyright (c) 2018-2021, 2023-2024 by Rocky Bernstein
 #
 #  This program is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -13,27 +13,24 @@
 #  You should have received a copy of the GNU General Public License
 #  along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-"""Isolate Python 3 version-specific semantic actions here.
+"""
+Isolate Python 3 version-specific semantic actions here.
 """
 
+from xdis import iscode
+
 from uncompyle6.semantics.consts import TABLE_DIRECT
-
-from xdis import co_flags_is_async, iscode
-from uncompyle6.scanner import Code
-from uncompyle6.semantics.helper import (
-    find_code_node,
-    gen_function_parens_adjust,
-)
-
-from uncompyle6.semantics.make_function3 import make_function3_annotate
 from uncompyle6.semantics.customize35 import customize_for_version35
 from uncompyle6.semantics.customize36 import customize_for_version36
 from uncompyle6.semantics.customize37 import customize_for_version37
 from uncompyle6.semantics.customize38 import customize_for_version38
+from uncompyle6.semantics.helper import find_code_node, gen_function_parens_adjust
+from uncompyle6.semantics.make_function3 import make_function3_annotate
+from uncompyle6.util import get_code_name
 
 
-def customize_for_version3(self, version):
-    TABLE_DIRECT.update(
+def customize_for_version3(self, version: tuple):
+    self.TABLE_DIRECT.update(
         {
             "comp_for": (" for %c in %c", (2, "store"), (0, "expr")),
             "if_exp_not": (
@@ -51,10 +48,9 @@ def customize_for_version3(self, version):
             "import_cont": (", %c", 2),
             "kwarg": ("%[0]{attr}=%c", 1),
             "raise_stmt2": ("%|raise %c from %c\n", 0, 1),
-            "tf_tryelsestmtl3": ( '%c%-%c%|else:\n%+%c', 1, 3, 5 ),
+            "tf_tryelsestmtl3": ("%c%-%c%|else:\n%+%c", 1, 3, 5),
             "store_locals": ("%|# inspect.currentframe().f_locals = __locals__\n",),
             "with": ("%|with %c:\n%+%c%-", 0, 3),
-            "withasstmt": ("%|with %c as (%c):\n%+%c%-", 0, 2, 3),
         }
     )
 
@@ -67,22 +63,22 @@ def customize_for_version3(self, version):
     # are different. See test_fileio.py for an example that shows this.
     def tryfinallystmt(node):
         suite_stmts = node[1][0]
-        if len(suite_stmts) == 1 and suite_stmts[0] == 'stmt':
+        if len(suite_stmts) == 1 and suite_stmts[0] == "stmt":
             stmt = suite_stmts[0]
             try_something = stmt[0]
             if try_something == "try_except":
                 try_something.kind = "tf_try_except"
             if try_something.kind.startswith("tryelsestmt"):
                 if try_something == "tryelsestmtl3":
-                    try_something.kind = 'tf_tryelsestmtl3'
+                    try_something.kind = "tf_tryelsestmtl3"
                 else:
-                    try_something.kind = 'tf_tryelsestmt'
+                    try_something.kind = "tf_tryelsestmt"
         self.default(node)
+
     self.n_tryfinallystmt = tryfinallystmt
 
     def n_classdef3(node):
-        """Handle "classdef" nonterminal for 3.0 >= version 3.0 < 3.6
-        """
+        """Handle "classdef" nonterminal for 3.0 >= version 3.0 < 3.6"""
 
         assert (3, 0) <= self.version < (3, 6)
 
@@ -142,14 +138,10 @@ def customize_for_version3(self, version):
                 # Python 3.2 works like this
                 subclass_code = find_code_node(load_closure, -2).attr
             else:
-                raise "Internal Error n_classdef: cannot find class body"
-            if hasattr(build_class[3], "__len__"):
-                if not subclass_info:
-                    subclass_info = build_class[3]
-            elif hasattr(build_class[2], "__len__"):
-                subclass_info = build_class[2]
-            else:
-                raise "Internal Error n_classdef: cannot superclass name"
+                raise RuntimeError("Internal Error n_classdef: cannot find class body")
+
+            subclass_info = build_class
+
         elif not subclass_info:
             if mkfunc[0] in ("no_kwargs", "kwargs"):
                 subclass_code = mkfunc[1].attr
@@ -191,18 +183,25 @@ def customize_for_version3(self, version):
         # the iteration variable. These rules we can ignore
         # since we pick up the iteration variable some other way and
         # we definitely don't include in the source  _[dd].
-        TABLE_DIRECT.update({
-            "ifstmt30":	( "%|if %c:\n%+%c%-",
-                          (0, "testfalse_then"),
-                          (1, "_ifstmts_jump30") ),
-            "ifnotstmt30": ( "%|if not %c:\n%+%c%-",
-                             (0, "testtrue_then"),
-                             (1, "_ifstmts_jump30") ),
-            "try_except30": ( "%|try:\n%+%c%-%c\n\n",
-                              (1, "suite_stmts_opt"),
-                              (4, "except_handler") ),
-
-            })
+        self.TABLE_DIRECT.update(
+            {
+                "ifstmt30": (
+                    "%|if %c:\n%+%c%-",
+                    (0, "testfalse_then"),
+                    (1, "_ifstmts_jump30"),
+                ),
+                "ifnotstmt30": (
+                    "%|if not %c:\n%+%c%-",
+                    (0, "testtrue_then"),
+                    (1, "_ifstmts_jump30"),
+                ),
+                "try_except30": (
+                    "%|try:\n%+%c%-%c\n\n",
+                    (1, "suite_stmts_opt"),
+                    (4, "except_handler"),
+                ),
+            }
+        )
 
         def n_comp_iter(node):
             if node[0] == "expr":
@@ -222,7 +221,7 @@ def customize_for_version3(self, version):
             assert node[0] == "expr"
             if node[0][0] == "get_iter":
                 # Skip over yield_from.expr.get_iter which adds an
-                # extra iter(). Maybe we can do in tranformation phase instead?
+                # extra iter(). Maybe we can do in transformation phase instead?
                 template = ("yield from %c", (0, "expr"))
                 self.template_engine(template, node[0][0])
             else:
@@ -235,7 +234,6 @@ def customize_for_version3(self, version):
     if (3, 2) <= version <= (3, 4):
 
         def n_call(node):
-
             mapping = self._get_mapping(node)
             key = node
             for i in mapping[1:]:
@@ -289,24 +287,23 @@ def customize_for_version3(self, version):
         self.n_call = n_call
 
     def n_mkfunc_annotate(node):
-
         # Handling EXTENDED_ARG before MAKE_FUNCTION ...
         i = -1 if node[-2] == "EXTENDED_ARG" else 0
 
         if self.version < (3, 3):
-            code = node[-2 + i]
+            code_node = node[-2 + i]
         elif self.version >= (3, 3) or node[-2] == "kwargs":
             # LOAD_CONST code object ..
             # LOAD_CONST        'x0'  if >= 3.3
             # EXTENDED_ARG
             # MAKE_FUNCTION ..
-            code = node[-3 + i]
+            code_node = node[-3 + i]
         elif node[-3] == "expr":
-            code = node[-3][0]
+            code_node = node[-3][0]
         else:
             # LOAD_CONST code object ..
             # MAKE_FUNCTION ..
-            code = node[-3]
+            code_node = node[-3]
 
         self.indent_more()
         for annotate_last in range(len(node) - 1, -1, -1):
@@ -316,13 +313,17 @@ def customize_for_version3(self, version):
         # FIXME: the real situation is that when derived from
         # function_def_annotate we the name has been filled in.
         # But when derived from funcdefdeco it hasn't Would like a better
-        # way to distinquish.
+        # way to distinguish.
         if self.f.getvalue()[-4:] == "def ":
-            self.write(code.attr.co_name)
+            self.write(get_code_name(code_node.attr))
 
         # FIXME: handle and pass full annotate args
         make_function3_annotate(
-            self, node, is_lambda=False, code_node=code, annotate_last=annotate_last
+            self,
+            node,
+            is_lambda=False,
+            code_node=code_node,
+            annotate_last=annotate_last,
         )
 
         if len(self.param_stack) > 1:
@@ -334,12 +335,12 @@ def customize_for_version3(self, version):
 
     self.n_mkfunc_annotate = n_mkfunc_annotate
 
-    TABLE_DIRECT.update(
+    self.TABLE_DIRECT.update(
         {
             "tryelsestmtl3": (
                 "%|try:\n%+%c%-%c%|else:\n%+%c%-",
                 (1, "suite_stmts_opt"),
-                3, # "except_handler_else" or "except_handler"
+                3,  # "except_handler_else" or "except_handler"
                 (5, "else_suitel"),
             ),
             "LOAD_CLASSDEREF": ("%{pattr}",),
@@ -349,7 +350,7 @@ def customize_for_version3(self, version):
         #######################
         # Python 3.4+ Changes #
         #######################
-        TABLE_DIRECT.update(
+        self.TABLE_DIRECT.update(
             {
                 "LOAD_CLASSDEREF": ("%{pattr}",),
                 "yield_from": ("yield from %c", (0, "expr")),

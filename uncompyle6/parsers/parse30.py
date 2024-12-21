@@ -1,4 +1,4 @@
-#  Copyright (c) 2016-2017 Rocky Bernstein
+#  Copyright (c) 2016-2017, 2022-2024 Rocky Bernstein
 """
 spark grammar differences over Python 3.1 for Python 3.0.
 """
@@ -7,20 +7,21 @@ from __future__ import print_function
 from uncompyle6.parser import PythonParserSingle
 from uncompyle6.parsers.parse31 import Python31Parser
 
-class Python30Parser(Python31Parser):
 
+class Python30Parser(Python31Parser):
     def p_30(self, args):
         """
 
         pt_bp             ::= POP_TOP POP_BLOCK
 
-        assert            ::= assert_expr jmp_true LOAD_ASSERT RAISE_VARARGS_1 COME_FROM POP_TOP
-        assert2           ::= assert_expr jmp_true LOAD_ASSERT expr CALL_FUNCTION_1 RAISE_VARARGS_1
-                              come_froms
+        assert            ::= assert_expr jmp_true LOAD_ASSERT RAISE_VARARGS_1
+                              COME_FROM POP_TOP
+        assert2           ::= assert_expr jmp_true LOAD_ASSERT expr CALL_FUNCTION_1
+                              RAISE_VARARGS_1 come_froms
         call_stmt         ::= expr _come_froms POP_TOP
 
-        return_if_lambda  ::= RETURN_END_IF_LAMBDA COME_FROM POP_TOP
-        compare_chained2  ::= expr COMPARE_OP RETURN_END_IF_LAMBDA
+        return_if_lambda       ::= RETURN_END_IF_LAMBDA COME_FROM POP_TOP
+        compare_chained_right  ::= expr COMPARE_OP RETURN_END_IF_LAMBDA
 
         # FIXME: combine with parse3.2
         whileTruestmt     ::= SETUP_LOOP l_stmts_opt
@@ -30,8 +31,8 @@ class Python30Parser(Python31Parser):
 
         # In many ways Python 3.0 code generation is more like Python 2.6 than
         # it is 2.7 or 3.1. So we have a number of 2.6ish (and before) rules below
-        # Specifically POP_TOP is more prevelant since there is no POP_JUMP_IF_...
-        # instructions
+        # Specifically POP_TOP is more prevalant since there is no POP_JUMP_IF_...
+        # instructions.
 
         _ifstmts_jump  ::= c_stmts JUMP_FORWARD _come_froms POP_TOP COME_FROM
         _ifstmts_jump  ::= c_stmts COME_FROM POP_TOP
@@ -65,7 +66,7 @@ class Python30Parser(Python31Parser):
         iflaststmt  ::= testexpr c_stmts_opt JUMP_ABSOLUTE COME_FROM POP_TOP
 
 
-        withasstmt    ::= expr setupwithas store suite_stmts_opt
+        with_as    ::= expr setupwithas store suite_stmts_opt
                           POP_BLOCK LOAD_CONST COME_FROM_FINALLY
                           LOAD_FAST DELETE_FAST WITH_CLEANUP END_FINALLY
         setupwithas   ::= DUP_TOP LOAD_ATTR STORE_FAST LOAD_ATTR CALL_FUNCTION_0 setup_finally
@@ -73,9 +74,10 @@ class Python30Parser(Python31Parser):
 
         # Need to keep LOAD_FAST as index 1
         set_comp_header  ::= BUILD_SET_0 DUP_TOP STORE_FAST
+
         set_comp_func ::= set_comp_header
-                          LOAD_FAST FOR_ITER store comp_iter
-                          JUMP_BACK POP_TOP JUMP_BACK RETURN_VALUE RETURN_LAST
+                          LOAD_ARG FOR_ITER store comp_iter
+                          JUMP_BACK ending_return
 
         list_comp_header ::= BUILD_LIST_0 DUP_TOP STORE_FAST
         list_comp        ::= list_comp_header
@@ -84,6 +86,11 @@ class Python30Parser(Python31Parser):
         list_comp        ::= list_comp_header
                              LOAD_FAST FOR_ITER store comp_iter
                              JUMP_BACK _come_froms POP_TOP JUMP_BACK
+
+        list_for         ::= DUP_TOP STORE_FAST
+                             expr_or_arg
+                             FOR_ITER
+                             store list_iter jb_or_c
 
         set_comp         ::= set_comp_header
                              LOAD_FAST FOR_ITER store comp_iter
@@ -97,6 +104,11 @@ class Python30Parser(Python31Parser):
                              LOAD_FAST FOR_ITER store dict_comp_iter
                              JUMP_BACK _come_froms POP_TOP JUMP_BACK
 
+        dict_comp_func   ::= BUILD_MAP_0
+                             DUP_TOP STORE_FAST
+                             LOAD_ARG FOR_ITER store
+                             dict_comp_iter JUMP_BACK ending_return
+
         stmt         ::= try_except30
         try_except30 ::= SETUP_EXCEPT suite_stmts_opt
                         _come_froms pt_bp
@@ -105,11 +117,13 @@ class Python30Parser(Python31Parser):
         # From Python 2.6
 
 
-        list_iter  ::= list_if JUMP_BACK
-        list_iter  ::= list_if JUMP_BACK _come_froms POP_TOP
-        lc_body    ::= LOAD_NAME expr LIST_APPEND
-	lc_body    ::= LOAD_FAST expr LIST_APPEND
-        list_if    ::= expr jmp_false_then list_iter
+        lc_body     ::= LOAD_FAST expr LIST_APPEND
+        lc_body     ::= LOAD_NAME expr LIST_APPEND
+        list_if     ::= expr jmp_false_then list_iter
+        list_if_not ::= expr jmp_true list_iter JUMP_BACK come_froms POP_TOP
+        list_iter   ::= list_if JUMP_BACK
+        list_iter   ::= list_if JUMP_BACK _come_froms POP_TOP
+
         #############
 
         dict_comp_iter   ::= expr expr ROT_TWO expr STORE_SUBSCR
@@ -193,33 +207,38 @@ class Python30Parser(Python31Parser):
                            come_froms POP_TOP POP_BLOCK COME_FROM_LOOP
 
 
-        # compare_chained is like x <= y <= z
-        compare_chained1  ::= expr DUP_TOP ROT_THREE COMPARE_OP
-                              jmp_false compare_chained1 _come_froms
-        compare_chained1  ::= expr DUP_TOP ROT_THREE COMPARE_OP
-                              jmp_false compare_chained2 _come_froms
-        compare_chained2 ::= expr COMPARE_OP RETURN_END_IF
+        # A "compare_chained" is two comparisons like x <= y <= z
+        compared_chained_middle  ::= expr DUP_TOP ROT_THREE COMPARE_OP
+                                     jmp_false compared_chained_middle _come_froms
+        compared_chained_middle  ::= expr DUP_TOP ROT_THREE COMPARE_OP
+                                     jmp_false compare_chained_right _come_froms
+        compare_chained_right ::= expr COMPARE_OP RETURN_END_IF
         """
 
-
     def remove_rules_30(self):
-        self.remove_rules("""
+        self.remove_rules(
+            """
 
         # The were found using grammar coverage
         while1stmt     ::= SETUP_LOOP l_stmts COME_FROM JUMP_BACK COME_FROM_LOOP
         whileTruestmt  ::= SETUP_LOOP l_stmts_opt JUMP_BACK POP_BLOCK COME_FROM_LOOP
-        whileelsestmt  ::= SETUP_LOOP testexpr l_stmts_opt JUMP_BACK POP_BLOCK else_suitel COME_FROM_LOOP
-        whilestmt      ::= SETUP_LOOP testexpr l_stmts_opt JUMP_BACK POP_BLOCK COME_FROM_LOOP
-        whilestmt      ::= SETUP_LOOP testexpr l_stmts_opt JUMP_BACK POP_BLOCK JUMP_BACK COME_FROM_LOOP
+        whileelsestmt  ::= SETUP_LOOP testexpr l_stmts_opt JUMP_BACK POP_BLOCK
+                           else_suitel COME_FROM_LOOP
+        whilestmt      ::= SETUP_LOOP testexpr l_stmts_opt JUMP_BACK POP_BLOCK
+                           COME_FROM_LOOP
+        whilestmt      ::= SETUP_LOOP testexpr l_stmts_opt JUMP_BACK POP_BLOCK JUMP_BACK
+                           COME_FROM_LOOP
         whilestmt      ::= SETUP_LOOP testexpr returns POP_TOP POP_BLOCK COME_FROM_LOOP
-        withasstmt     ::= expr SETUP_WITH store suite_stmts_opt POP_BLOCK LOAD_CONST COME_FROM_WITH WITH_CLEANUP END_FINALLY
-        with           ::= expr SETUP_WITH POP_TOP suite_stmts_opt POP_BLOCK LOAD_CONST COME_FROM_WITH WITH_CLEANUP END_FINALLY
+        with_as        ::= expr SETUP_WITH store suite_stmts_opt POP_BLOCK LOAD_CONST
+                           COME_FROM_WITH WITH_CLEANUP END_FINALLY
+        with           ::= expr SETUP_WITH POP_TOP suite_stmts_opt POP_BLOCK LOAD_CONST
+                           COME_FROM_WITH WITH_CLEANUP END_FINALLY
 
         # lc_body ::= LOAD_FAST expr LIST_APPEND
         # lc_body ::= LOAD_NAME expr LIST_APPEND
         # lc_body ::= expr LIST_APPEND
         # list_comp ::= BUILD_LIST_0 list_iter
-        # list_for ::= expr FOR_ITER store list_iter jb_or_c
+        list_for ::= expr FOR_ITER store list_iter jb_or_c
         # list_if ::= expr jmp_false list_iter
         # list_if ::= expr jmp_false_then list_iter
         # list_if_not ::= expr jmp_true list_iter
@@ -258,10 +277,11 @@ class Python30Parser(Python31Parser):
         jmp_true         ::= JUMP_IF_TRUE_OR_POP POP_TOP
         jmp_true         ::= POP_JUMP_IF_TRUE
 
-        compare_chained1 ::= expr DUP_TOP ROT_THREE COMPARE_OP JUMP_IF_FALSE_OR_POP
-                             compare_chained1 COME_FROM
-        compare_chained1 ::= expr DUP_TOP ROT_THREE COMPARE_OP JUMP_IF_FALSE_OR_POP
-                             compare_chained2 COME_FROM
+        compared_chained_middle ::= expr DUP_TOP ROT_THREE COMPARE_OP
+                                    JUMP_IF_FALSE_OR_POP compared_chained_middle
+                                    COME_FROM
+        compared_chained_middle ::= expr DUP_TOP ROT_THREE COMPARE_OP
+                                    JUMP_IF_FALSE_OR_POP compare_chained_right COME_FROM
         ret_or           ::= expr JUMP_IF_TRUE_OR_POP  return_expr_or_cond COME_FROM
         ret_and          ::= expr JUMP_IF_FALSE_OR_POP return_expr_or_cond COME_FROM
         if_exp_ret       ::= expr POP_JUMP_IF_FALSE expr RETURN_END_IF
@@ -270,29 +290,30 @@ class Python30Parser(Python31Parser):
         or               ::= expr JUMP_IF_TRUE_OR_POP expr COME_FROM
         and              ::= expr JUMP_IF_TRUE_OR_POP expr COME_FROM
         and              ::= expr JUMP_IF_FALSE_OR_POP expr COME_FROM
-        """)
+        """
+        )
 
     def customize_grammar_rules(self, tokens, customize):
         super(Python30Parser, self).customize_grammar_rules(tokens, customize)
         self.remove_rules_30()
 
         self.check_reduce["iflaststmtl"] = "AST"
-        self.check_reduce['ifstmt'] = "AST"
+        self.check_reduce["ifstmt"] = "AST"
         self.check_reduce["ifelsestmtc"] = "AST"
         self.check_reduce["ifelsestmt"] = "AST"
         # self.check_reduce["and"] = "stmt"
         return
 
     def reduce_is_invalid(self, rule, ast, tokens, first, last):
-        invalid = super(Python30Parser,
-                        self).reduce_is_invalid(rule, ast,
-                                                tokens, first, last)
+        invalid = super(Python30Parser, self).reduce_is_invalid(
+            rule, ast, tokens, first, last
+        )
         if invalid:
             return invalid
         lhs = rule[0]
         if (
-            lhs in ("iflaststmtl", "ifstmt",
-                        "ifelsestmt", "ifelsestmtc") and ast[0] == "testexpr"
+            lhs in ("iflaststmtl", "ifstmt", "ifelsestmt", "ifelsestmtc")
+            and ast[0] == "testexpr"
         ):
             testexpr = ast[0]
             if testexpr[0] == "testfalse":
@@ -300,7 +321,10 @@ class Python30Parser(Python31Parser):
                 if lhs == "ifelsestmtc" and ast[2] == "jump_absolute_else":
                     jump_absolute_else = ast[2]
                     come_from = jump_absolute_else[2]
-                    return come_from == "COME_FROM" and come_from.attr < tokens[first].offset
+                    return (
+                        come_from == "COME_FROM"
+                        and come_from.attr < tokens[first].offset
+                    )
                     pass
                 elif lhs in ("ifelsestmt", "ifelsestmtc") and ast[2] == "jump_cf_pop":
                     jump_cf_pop = ast[2]
@@ -323,11 +347,11 @@ class Python30Parser(Python31Parser):
                     jmp_false = testfalse[1]
                     if last == len(tokens):
                         last -= 1
-                    while (isinstance(tokens[first].offset, str) and first < last):
+                    while isinstance(tokens[first].offset, str) and first < last:
                         first += 1
                     if first == last:
                         return True
-                    while (first < last and isinstance(tokens[last].offset, str)):
+                    while first < last and isinstance(tokens[last].offset, str):
                         last -= 1
                     if rule[0] == "iflaststmtl":
                         return not (jmp_false[0].attr <= tokens[last].offset)
@@ -335,8 +359,9 @@ class Python30Parser(Python31Parser):
                         jmp_false_target = jmp_false[0].attr
                         if tokens[first].offset > jmp_false_target:
                             return True
-                        return (
-                            (jmp_false_target > tokens[last].offset) and tokens[last] != "JUMP_FORWARD")
+                        return (jmp_false_target > tokens[last].offset) and tokens[
+                            last
+                        ] != "JUMP_FORWARD"
                     pass
                 pass
             pass
@@ -345,33 +370,43 @@ class Python30Parser(Python31Parser):
 
     pass
 
+
 class Python30ParserSingle(Python30Parser, PythonParserSingle):
     pass
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     # Check grammar
     p = Python30Parser()
     p.remove_rules_30()
     p.check_grammar()
-    from uncompyle6 import PYTHON_VERSION, IS_PYPY
-    if PYTHON_VERSION == 3.0:
+    from xdis.version_info import IS_PYPY, PYTHON_VERSION_TRIPLE
+
+    if PYTHON_VERSION_TRIPLE[:2] == (3, 0):
         lhs, rhs, tokens, right_recursive, dup_rhs = p.check_sets()
         from uncompyle6.scanner import get_scanner
-        s = get_scanner(PYTHON_VERSION, IS_PYPY)
-        opcode_set = set(s.opc.opname).union(set(
-            """JUMP_BACK CONTINUE RETURN_END_IF COME_FROM
+
+        s = get_scanner(PYTHON_VERSION_TRIPLE, IS_PYPY)
+        opcode_set = set(s.opc.opname).union(
+            set(
+                """JUMP_BACK CONTINUE RETURN_END_IF COME_FROM
                LOAD_GENEXPR LOAD_ASSERT LOAD_SETCOMP LOAD_DICTCOMP LOAD_CLASSNAME
                LAMBDA_MARKER RETURN_LAST
-            """.split()))
+            """.split()
+            )
+        )
         ## FIXME: try this
         remain_tokens = set(tokens) - opcode_set
         import re
-        remain_tokens = set([re.sub(r'_\d+$', '',  t) for t in remain_tokens])
-        remain_tokens = set([re.sub('_CONT$', '', t) for t in remain_tokens])
+
+        remain_tokens = set([re.sub(r"_\d+$", "", t) for t in remain_tokens])
+        remain_tokens = set([re.sub("_CONT$", "", t) for t in remain_tokens])
         remain_tokens = set(remain_tokens) - opcode_set
         print(remain_tokens)
         import sys
+
         if len(sys.argv) > 1:
             from spark_parser.spark import rule2str
+
             for rule in sorted(p.rule2name.items()):
                 print(rule2str(rule[0]))

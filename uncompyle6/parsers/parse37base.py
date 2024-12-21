@@ -1,14 +1,13 @@
-#  Copyright (c) 2016-2017, 2019-2020, 2022 Rocky Bernstein
+#  Copyright (c) 2016-2017, 2019-2020, 2022-2024 Rocky Bernstein
 """
 Python 3.7 base code. We keep non-custom-generated grammar rules out of this file.
 """
-from uncompyle6.parser import ParserError, PythonParser, nop_func
-from uncompyle6.parsers.treenode import SyntaxTree
 from spark_parser import DEFAULT_DEBUG as PARSER_DEFAULT_DEBUG
 from spark_parser.spark import rule2str
 
+from uncompyle6.parser import ParserError, PythonParser, nop_func
 from uncompyle6.parsers.reducecheck import (
-    and_check,
+    and_invalid,
     ifelsestmt,
     iflaststmt,
     ifstmt,
@@ -16,9 +15,10 @@ from uncompyle6.parsers.reducecheck import (
     or_check,
     testtrue,
     tryelsestmtl3,
-    while1stmt,
     while1elsestmt,
+    while1stmt,
 )
+from uncompyle6.parsers.treenode import SyntaxTree
 
 
 class Python37BaseParser(PythonParser):
@@ -38,7 +38,7 @@ class Python37BaseParser(PythonParser):
             return "%s_0" % (token.kind)
 
     def add_make_function_rule(self, rule, opname, attr, customize):
-        """Python 3.3 added a an addtional LOAD_STR before MAKE_FUNCTION and
+        """Python 3.3 added a an additional LOAD_STR before MAKE_FUNCTION and
         this has an effect on many rules.
         """
         new_rule = rule % "LOAD_STR "
@@ -54,7 +54,7 @@ class Python37BaseParser(PythonParser):
                         expr
                         call
                         CALL_FUNCTION_3
-         """
+        """
         # FIXME: I bet this can be simplified
         # look for next MAKE_FUNCTION
         for i in range(i + 1, len(tokens)):
@@ -104,7 +104,6 @@ class Python37BaseParser(PythonParser):
     # organization for this. For example, arrange organize by opcode base?
 
     def customize_grammar_rules(self, tokens, customize):
-
         is_pypy = False
 
         # For a rough break out on the first word. This may
@@ -139,7 +138,7 @@ class Python37BaseParser(PythonParser):
         # Note: BUILD_TUPLE_UNPACK_WITH_CALL gets considered by
         # default because it starts with BUILD. So we'll set to ignore it from
         # the start.
-        custom_ops_processed = set(("BUILD_TUPLE_UNPACK_WITH_CALL",))
+        custom_ops_processed = {"BUILD_TUPLE_UNPACK_WITH_CALL"}
 
         # A set of instruction operation names that exist in the token stream.
         # We use this customize the grammar that we create.
@@ -348,7 +347,6 @@ class Python37BaseParser(PythonParser):
                 self.addRule(rule, nop_func)
 
             elif opname_base in ("BUILD_MAP", "BUILD_MAP_UNPACK"):
-
                 if opname == "BUILD_MAP_UNPACK":
                     self.addRule(
                         """
@@ -431,35 +429,39 @@ class Python37BaseParser(PythonParser):
                 "BUILD_TUPLE",
                 "BUILD_TUPLE_UNPACK",
             ):
-                v = token.attr
+                collection_size = token.attr
 
                 is_LOAD_CLOSURE = False
                 if opname_base == "BUILD_TUPLE":
                     # If is part of a "load_closure", then it is not part of a
                     # "list".
                     is_LOAD_CLOSURE = True
-                    for j in range(v):
+                    for j in range(collection_size):
                         if tokens[i - j - 1].kind != "LOAD_CLOSURE":
                             is_LOAD_CLOSURE = False
                             break
                     if is_LOAD_CLOSURE:
-                        rule = "load_closure ::= %s%s" % (("LOAD_CLOSURE " * v), opname)
+                        rule = "load_closure ::= %s%s" % (
+                            ("LOAD_CLOSURE " * collection_size),
+                            opname,
+                        )
                         self.add_unique_rule(rule, opname, token.attr, customize)
-                if not is_LOAD_CLOSURE or v == 0:
+                if not is_LOAD_CLOSURE or collection_size == 0:
                     # We do this complicated test to speed up parsing of
                     # pathelogically long literals, especially those over 1024.
-                    build_count = token.attr
-                    thousands = build_count // 1024
-                    thirty32s = (build_count // 32) % 32
+                    thousands = collection_size // 1024
+                    thirty32s = (collection_size // 32) % 32
                     if thirty32s > 0:
                         rule = "expr32 ::=%s" % (" expr" * 32)
-                        self.add_unique_rule(rule, opname_base, build_count, customize)
+                        self.add_unique_rule(
+                            rule, opname_base, collection_size, customize
+                        )
                         pass
                     if thousands > 0:
                         self.add_unique_rule(
                             "expr1024 ::=%s" % (" expr32" * 32),
                             opname_base,
-                            build_count,
+                            collection_size,
                             customize,
                         )
                         pass
@@ -468,7 +470,7 @@ class Python37BaseParser(PythonParser):
                         ("%s ::= " % collection)
                         + "expr1024 " * thousands
                         + "expr32 " * thirty32s
-                        + "expr " * (build_count % 32)
+                        + "expr " * (collection_size % 32)
                         + opname
                     )
                     self.add_unique_rules(["expr ::= %s" % collection, rule], customize)
@@ -478,8 +480,8 @@ class Python37BaseParser(PythonParser):
                 if token.attr == 2:
                     self.add_unique_rules(
                         [
-                            "expr ::= build_slice2",
-                            "build_slice2 ::= expr expr BUILD_SLICE_2",
+                            "expr ::= slice2",
+                            "slice2 ::= expr expr BUILD_SLICE_2",
                         ],
                         customize,
                     )
@@ -489,8 +491,8 @@ class Python37BaseParser(PythonParser):
                     )
                     self.add_unique_rules(
                         [
-                            "expr ::= build_slice3",
-                            "build_slice3 ::= expr expr expr BUILD_SLICE_3",
+                            "expr   ::= slice3",
+                            "slice3 ::= expr expr expr BUILD_SLICE_3",
                         ],
                         customize,
                     )
@@ -521,9 +523,9 @@ class Python37BaseParser(PythonParser):
                     "CALL_FUNCTION_VAR_KW",
                 )
             ) or opname.startswith("CALL_FUNCTION_KW"):
-
                 if opname == "CALL_FUNCTION" and token.attr == 1:
                     rule = """
+                     expr         ::= dict_comp
                      dict_comp    ::= LOAD_DICTCOMP LOAD_STR MAKE_FUNCTION_0 expr
                                       GET_ITER CALL_FUNCTION_1
                     classdefdeco1 ::= expr classdefdeco2 CALL_FUNCTION_1
@@ -558,11 +560,12 @@ class Python37BaseParser(PythonParser):
                     nak = (len(opname_base) - len("CALL_METHOD")) // 3
                     rule = (
                         "call ::= expr "
-                        + ("expr " * args_pos)
+                        + ("pos_arg " * args_pos)
                         + ("kwarg " * args_kw)
                         + "expr " * nak
                         + opname
                     )
+
                 self.add_unique_rule(rule, opname, token.attr, customize)
 
             elif opname == "CONTINUE":
@@ -714,7 +717,9 @@ class Python37BaseParser(PythonParser):
                 )
                 custom_ops_processed.add(opname)
             elif opname == "LOAD_LISTCOMP":
-                self.add_unique_rule("expr ::= listcomp", opname, token.attr, customize)
+                self.add_unique_rule(
+                    "expr ::= list_comp", opname, token.attr, customize
+                )
                 custom_ops_processed.add(opname)
             elif opname == "LOAD_NAME":
                 if (
@@ -793,7 +798,7 @@ class Python37BaseParser(PythonParser):
                             #   and have GET_ITER CALL_FUNCTION_1
                             # Todo: For Pypy we need to modify this slightly
                             rule_pat = (
-                                "listcomp ::= %sload_closure LOAD_LISTCOMP %%s%s expr "
+                                "list_comp ::= %sload_closure LOAD_LISTCOMP %%s%s expr "
                                 "GET_ITER CALL_FUNCTION_1"
                                 % ("pos_arg " * args_pos, opname)
                             )
@@ -891,14 +896,14 @@ class Python37BaseParser(PythonParser):
                         # 'exprs' in the rule above into a
                         # tuple.
                         rule_pat = (
-                            "listcomp ::= load_closure LOAD_LISTCOMP %%s%s "
+                            "list_comp ::= load_closure LOAD_LISTCOMP %%s%s "
                             "expr GET_ITER CALL_FUNCTION_1" % (opname,)
                         )
                         self.add_make_function_rule(
                             rule_pat, opname, token.attr, customize
                         )
                         rule_pat = (
-                            "listcomp ::= %sLOAD_LISTCOMP %%s%s expr "
+                            "list_comp ::= %sLOAD_LISTCOMP %%s%s expr "
                             "GET_ITER CALL_FUNCTION_1" % ("expr " * args_pos, opname)
                         )
                         self.add_make_function_rule(
@@ -932,7 +937,7 @@ class Python37BaseParser(PythonParser):
                         #   and have GET_ITER CALL_FUNCTION_1
                         # Todo: For Pypy we need to modify this slightly
                         rule_pat = (
-                            "listcomp ::= %sLOAD_LISTCOMP %%s%s expr "
+                            "list_comp ::= %sLOAD_LISTCOMP %%s%s expr "
                             "GET_ITER CALL_FUNCTION_1" % ("expr " * args_pos, opname)
                         )
                         self.add_make_function_rule(
@@ -1050,14 +1055,14 @@ class Python37BaseParser(PythonParser):
             elif opname == "SETUP_WITH":
                 rules_str = """
                   stmt       ::= with
-                  stmt       ::= withasstmt
+                  stmt       ::= with_as
 
                   with       ::= expr
                                  SETUP_WITH POP_TOP
                                  suite_stmts_opt
                                  COME_FROM_WITH
                                  with_suffix
-                  withasstmt ::= expr SETUP_WITH store suite_stmts_opt COME_FROM_WITH
+                  with_as ::= expr SETUP_WITH store suite_stmts_opt COME_FROM_WITH
                                  with_suffix
 
                   with       ::= expr
@@ -1066,7 +1071,7 @@ class Python37BaseParser(PythonParser):
                                  POP_BLOCK LOAD_CONST COME_FROM_WITH
                                  with_suffix
 
-                  withasstmt ::= expr
+                  with_as ::= expr
                                  SETUP_WITH store suite_stmts_opt
                                  POP_BLOCK LOAD_CONST COME_FROM_WITH
                                  with_suffix
@@ -1075,7 +1080,7 @@ class Python37BaseParser(PythonParser):
                                  SETUP_WITH POP_TOP suite_stmts_opt
                                  POP_BLOCK LOAD_CONST COME_FROM_WITH
                                  with_suffix
-                  withasstmt ::= expr
+                  with_as ::= expr
                                  SETUP_WITH store suite_stmts_opt
                                  POP_BLOCK LOAD_CONST COME_FROM_WITH
                                  with_suffix
@@ -1093,17 +1098,18 @@ class Python37BaseParser(PythonParser):
                                      POP_BLOCK LOAD_CONST COME_FROM_WITH
                                      with_suffix
 
-                      withasstmt ::= expr
-                                     SETUP_WITH store suite_stmts_opt
-                                     POP_BLOCK LOAD_CONST COME_FROM_WITH
-
-                      withasstmt ::= expr
-                                     SETUP_WITH store suite_stmts
-                                     POP_BLOCK BEGIN_FINALLY COME_FROM_WITH with_suffix
 
                       with       ::= expr SETUP_WITH POP_TOP suite_stmts_opt POP_BLOCK
                                      BEGIN_FINALLY COME_FROM_WITH
                                      with_suffix
+
+                      with_as    ::= expr
+                                     SETUP_WITH store suite_stmts_opt
+                                     POP_BLOCK LOAD_CONST COME_FROM_WITH
+
+                      with_as    ::= expr
+                                    SETUP_WITH store suite_stmts
+                                    POP_BLOCK BEGIN_FINALLY COME_FROM_WITH with_suffix
                     """
                 self.addRule(rules_str, nop_func)
 
@@ -1128,7 +1134,7 @@ class Python37BaseParser(PythonParser):
 
         self.reduce_check_table = {
             "_ifstmts_jump": ifstmts_jump,
-            "and": and_check,
+            "and": and_invalid,
             "ifelsestmt": ifelsestmt,
             "ifelsestmtl": ifelsestmt,
             "iflaststmt": iflaststmt,
@@ -1252,20 +1258,14 @@ class Python37BaseParser(PythonParser):
         try:
             if fn:
                 return fn(self, lhs, n, rule, ast, tokens, first, last)
-        except:
-            import sys, traceback
+        except Exception:
+            import sys
+            import traceback
 
             print(
-                ("Exception in %s %s\n"
-                 + "rule: %s\n"
-                 + "offsets %s .. %s")
-                % (
-                    fn.__name__,
-                    sys.exc_info()[1],
-                    rule2str(rule),
-                    tokens[first].offset,
-                    tokens[last].offset,
-                )
+                f"Exception in {fn.__name__} {sys.exc_info()[1]}\n"
+                + f"rule: {rule2str(rule)}\n"
+                + f"offsets {tokens[first].offset} .. {tokens[last].offset}"
             )
             print(traceback.print_tb(sys.exc_info()[2], -1))
             raise ParserError(tokens[last], tokens[last].off2int(), self.debug["rules"])

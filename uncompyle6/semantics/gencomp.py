@@ -23,9 +23,10 @@ from xdis import co_flags_is_async, iscode
 
 from uncompyle6.parser import get_python_parser
 from uncompyle6.scanner import Code
+from uncompyle6.scanners.tok import Token
 from uncompyle6.semantics.consts import PRECEDENCE
 from uncompyle6.semantics.helper import is_lambda_mode
-from uncompyle6.scanners.tok import Token
+
 
 class ComprehensionMixin:
     """
@@ -37,12 +38,13 @@ class ComprehensionMixin:
     Python source code. In source code, the implicit function calls
     are not seen.
     """
+
     def closure_walk(self, node, collection_index):
         """
         Dictionary and comprehensions using closure the way they are done in Python3.
         """
         p = self.prec
-        self.prec = 27
+        self.prec = PRECEDENCE["lambda_body"] - 1
 
         code_index = 0 if node[0] == "load_genexpr" else 1
         tree = self.get_comprehension_function(node, code_index=code_index)
@@ -97,9 +99,12 @@ class ComprehensionMixin:
         self.prec = p
 
     def comprehension_walk(
-        self, node, iter_index: Optional[int], code_index: int = -5,
+        self,
+        node,
+        iter_index: Optional[int],
+        code_index: int = -5,
     ):
-        p = self.prec
+        p: int = self.prec
         self.prec = PRECEDENCE["lambda_body"] - 1
 
         # FIXME: clean this up
@@ -111,7 +116,10 @@ class ComprehensionMixin:
             elif node[0] == "load_closure":
                 cn = node[1]
 
-        elif self.version >= (3, 0) and node in ("generator_exp", "generator_exp_async"):
+        elif self.version >= (3, 0) and node in (
+            "generator_exp",
+            "generator_exp_async",
+        ):
             if node[0] == "load_genexpr":
                 load_genexpr = node[0]
             elif node[1] == "load_genexpr":
@@ -140,7 +148,9 @@ class ComprehensionMixin:
         if is_lambda_mode(self.compile_mode):
             p_save = self.p
             self.p = get_python_parser(
-                self.version, compile_mode="exec", is_pypy=self.is_pypy,
+                self.version,
+                compile_mode="exec",
+                is_pypy=self.is_pypy,
             )
             tree = self.build_ast(code._tokens, code._customize, code)
             self.p = p_save
@@ -151,6 +161,27 @@ class ComprehensionMixin:
         # Remove single reductions as in ("stmts", "sstmt"):
         while len(tree) == 1:
             tree = tree[0]
+
+        if tree == "stmts":
+            # FIXME: rest is a return None?
+            # Verify this
+            # rest = tree[1:]
+            tree = tree[0]
+        elif tree == "lambda_start":
+            assert len(tree) <= 3
+            tree = tree[-2]
+            if tree == "return_expr_lambda":
+                tree = tree[1]
+            pass
+
+        if tree in (
+            "genexpr_func",
+            "genexpr_func_async",
+        ):
+            for i in range(3, 5):
+                if tree[i] == "comp_iter":
+                    iter_index = i
+                    break
 
         n = tree[iter_index]
 
@@ -243,6 +274,7 @@ class ComprehensionMixin:
 
         is_30_dict_comp = False
         store = None
+
         if node == "list_comp_async":
             # We have two different kinds of grammar rules:
             #   list_comp_async ::= LOAD_LISTCOMP LOAD_STR MAKE_FUNCTION_0 expr ...
@@ -303,8 +335,19 @@ class ComprehensionMixin:
             assert store == "store"
             n = set_iter_async[2]
         elif node == "list_comp" and tree[0] == "expr":
-            tree = tree[0][0]
-            n = tree[iter_index]
+            list_iter = None
+            for list_iter_try in tree:
+                if list_iter_try == "list_iter":
+                    list_iter = list_iter_try
+                    break
+                if not list_iter_try:
+                    tree = tree[0][0]
+                    n = tree[iter_index]
+                else:
+                    n = list_iter
+                    pass
+                pass
+            pass
         else:
             n = tree[iter_index]
 
@@ -365,7 +408,7 @@ class ComprehensionMixin:
 
         while n in ("list_iter", "list_afor", "list_afor2", "comp_iter"):
             # iterate one nesting deeper
-            if self.version == 3.0 and len(n) == 3:
+            if self.version == (3, 0) and len(n) == 3:
                 assert n[0] == "expr" and n[1] == "expr"
                 n = n[1]
             elif n == "list_afor":
@@ -378,14 +421,31 @@ class ComprehensionMixin:
                 n = n[0]
 
             if n in ("list_for", "comp_for"):
-                if n[2] == "store" and not store:
-                    store = n[2]
+                if n == "list_for" and not comp_for and n[0] == "expr":
+                    comp_for = n[0]
+
+                n_index = 3
+                if (
+                    (n[2] == "store")
+                    or (self.version == (3, 0) and n[4] == "store")
+                    and not store
+                ):
+                    if self.version == (3, 0):
+                        store = n[4]
+                        n_index = 5
+                    else:
+                        store = n[2]
                     if not comp_store:
                         comp_store = store
-                n = n[3]
-            elif n in ("list_if", "list_if_not",
-                       "list_if37", "list_if37_not",
-                       "comp_if", "comp_if_not"):
+                n = n[n_index]
+            elif n in (
+                "list_if",
+                "list_if_not",
+                "list_if37",
+                "list_if37_not",
+                "comp_if",
+                "comp_if_not",
+            ):
                 have_not = n in ("list_if_not", "comp_if_not", "list_if37_not")
                 if n in ("list_if37", "list_if37_not"):
                     n = n[1]
@@ -411,7 +471,7 @@ class ComprehensionMixin:
         assert store, "Couldn't find store in list/set comprehension"
 
         # A problem created with later Python code generation is that there
-        # is a lamda set up with a dummy argument name that is then called
+        # is a lambda set up with a dummy argument name that is then called
         # So we can't just translate that as is but need to replace the
         # dummy name. Below we are picking out the variable name as seen
         # in the code. And trying to generate code for the other parts
@@ -424,7 +484,16 @@ class ComprehensionMixin:
             self.write(": ")
             self.preorder(n[1])
         else:
-            self.preorder(n[0])
+            if self.version == (3, 0):
+                if isinstance(n, Token):
+                    body = store
+                elif len(n) > 1:
+                    body = n[1]
+                else:
+                    body = n[0]
+            else:
+                body = n[0]
+            self.preorder(body)
 
         if node == "list_comp_async":
             self.write(" async")
@@ -436,6 +505,7 @@ class ComprehensionMixin:
 
         if comp_store:
             self.preorder(comp_store)
+            comp_store = None
         else:
             self.preorder(store)
 
@@ -443,11 +513,21 @@ class ComprehensionMixin:
         if comp_for:
             self.preorder(comp_for)
         else:
+            try:
+                node[in_node_index]
+            except:
+                from trepan.api import debug
+
+                debug()
             self.preorder(node[in_node_index])
 
         # Here is where we handle nested list iterations.
         if tree == "list_comp" and self.version != (3, 0):
-            list_iter = tree[1]
+            list_iter = None
+            for list_iter_try in tree:
+                if list_iter_try == "list_iter":
+                    list_iter = list_iter_try
+                    break
             assert list_iter == "list_iter"
             if list_iter[0] == "list_for":
                 self.preorder(list_iter[0][3])
@@ -462,7 +542,7 @@ class ComprehensionMixin:
             if have_not:
                 self.write("not ")
                 pass
-            self.prec = 27
+            self.prec = PRECEDENCE["lambda_body"] - 1
             self.preorder(if_node)
             pass
         self.prec = p
@@ -473,7 +553,7 @@ class ComprehensionMixin:
         find the comprehension node buried in the tree which may
         be surrounded with start-like symbols or dominiators,.
         """
-        self.prec = 27
+        self.prec = PRECEDENCE["lambda_body"] - 1
         code_node = node[code_index]
         if code_node == "load_genexpr":
             code_node = code_node[0]
@@ -489,7 +569,9 @@ class ComprehensionMixin:
         if self.compile_mode in ("listcomp",):  # add other comprehensions to this list
             p_save = self.p
             self.p = get_python_parser(
-                self.version, compile_mode="exec", is_pypy=self.is_pypy,
+                self.version,
+                compile_mode="exec",
+                is_pypy=self.is_pypy,
             )
             tree = self.build_ast(
                 code._tokens, code._customize, code, is_lambda=self.is_lambda
@@ -508,9 +590,7 @@ class ComprehensionMixin:
             if tree[0] in ("dom_start", "dom_start_opt"):
                 tree = tree[1]
 
-        while len(tree) == 1 or (
-            tree in ("stmt", "sstmt", "return", "return_expr")
-        ):
+        while len(tree) == 1 or (tree in ("stmt", "sstmt", "return", "return_expr")):
             self.prec = 100
             tree = tree[1] if tree[0] in ("dom_start", "dom_start_opt") else tree[0]
         return tree
@@ -550,7 +630,7 @@ class ComprehensionMixin:
         collections = [node[-3]]
         list_ifs = []
 
-        if self.version[:2] == (3, 0) and n != "list_iter":
+        if self.version[:2] == (3, 0) and n.kind != "list_iter":
             # FIXME 3.0 is a snowflake here. We need
             # special code for this. Not sure if this is totally
             # correct.
@@ -586,14 +666,18 @@ class ComprehensionMixin:
             # Find the list comprehension body. It is the inner-most
             # node that is not list_.. .
             while n == "list_iter":
-
                 # recurse one step
                 n = n[0]
 
                 # FIXME: adjust for set comprehension
                 if n == "list_for":
                     stores.append(n[2])
-                    n = n[3]
+                    if self.version[:2] == (3, 0):
+                        body_index = 5
+                    else:
+                        body_index = 3
+
+                    n = n[body_index]
                     if n[0] == "list_for":
                         # Dog-paddle down largely singleton reductions
                         # to find the collection (expr)
@@ -610,7 +694,10 @@ class ComprehensionMixin:
                         list_ifs.append(n)
                     else:
                         list_ifs.append([1])
-                    n = n[-2] if n[-1] == "come_from_opt" else n[-1]
+                    if self.version[:2] == (3, 0) and n[2] == "list_iter":
+                        n = n[2]
+                    else:
+                        n = n[-2] if n[-1] == "come_from_opt" else n[-1]
                     pass
                 elif n == "list_if37":
                     list_ifs.append(n)
@@ -625,7 +712,11 @@ class ComprehensionMixin:
 
             assert n == "lc_body", tree
 
-            self.preorder(n[0])
+            if self.version[:2] == (3, 0):
+                body_index = 1
+            else:
+                body_index = 0
+            self.preorder(n[body_index])
 
         # FIXME: add indentation around "for"'s and "in"'s
         n_colls = len(collections)
@@ -639,6 +730,8 @@ class ComprehensionMixin:
                 self.write(" async")
                 pass
             self.write(" for ")
+            if self.version[:2] == (3, 0):
+                store = token
             self.preorder(store)
             self.write(" in ")
             self.preorder(collections[i])

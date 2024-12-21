@@ -1,4 +1,4 @@
-#  Copyright (c) 2016-2021 by Rocky Bernstein
+#  Copyright (c) 2016-2021, 2023-2024 by Rocky Bernstein
 #  Copyright (c) 2000-2002 by hartmut Goebel <h.goebel@crazy-compilers.com>
 #  Copyright (c) 1999 John Aycock
 #
@@ -15,9 +15,11 @@
 #  You should have received a copy of the GNU General Public License
 #  along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-import re, sys
+import re
+import sys
 
 intern = sys.intern
+from typing import Union
 
 
 def off2int(offset, prefer_last=True):
@@ -59,17 +61,19 @@ class Token:
         opname,
         attr=None,
         pattr=None,
-        offset=-1,
+        offset: Union[int, str] = -1,
         linestart=None,
         op=None,
         has_arg=None,
         opc=None,
         has_extended_arg=False,
+        optype=None,
     ):
         self.kind = intern(opname)
         self.has_arg = has_arg
         self.attr = attr
         self.pattr = pattr
+        self.optype = optype
         if has_extended_arg:
             self.offset = "%d_%d" % (offset, offset + 2)
         else:
@@ -87,7 +91,7 @@ class Token:
                 print(f"I don't know about Python version {e} yet.")
                 try:
                     version_tuple = tuple(int(i) for i in str(e)[1:-1].split("."))
-                except:
+                except Exception:
                     pass
                 else:
                     if version_tuple > (3, 9):
@@ -105,8 +109,8 @@ class Token:
             self.op = op
 
     def __eq__(self, o):
-        """ '==' on kind and "pattr" attributes.
-            It is okay if offsets and linestarts are different"""
+        """'==' on kind and "pattr" attributes.
+        It is okay if offsets and linestarts are different"""
         if isinstance(o, Token):
             return (self.kind == o.kind) and (
                 (self.pattr == o.pattr) or self.attr == o.attr
@@ -116,7 +120,7 @@ class Token:
             return self.kind == o
 
     def __ne__(self, o):
-        """ '!=', but it's okay if offsets and linestarts are different"""
+        """'!=', but it's okay if offsets and linestarts are different"""
         return not self.__eq__(o)
 
     def __repr__(self):
@@ -179,7 +183,7 @@ class Token:
                 elif name == "LOAD_ASSERT":
                     return "%s%s        %s" % (prefix, offset_opname, pattr)
                 elif self.op in self.opc.NAME_OPS:
-                    if self.opc.version >= 3.0:
+                    if self.opc.version_tuple >= (3, 0):
                         return "%s%s%s %s" % (prefix, offset_opname, argstr, self.attr)
                 elif name == "EXTENDED_ARG":
                     return "%s%s%s 0x%x << %s = %s" % (

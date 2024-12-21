@@ -29,7 +29,19 @@ function displaytime {
 # Python version setup
 FULLVERSION=$(pyenv local)
 PYVERSION=${FULLVERSION%.*}
-MINOR=${FULLVERSION##?.?.}
+
+if [[ $PYVERSION =~ 'pypy' ]] ; then
+    IS_PYPY=1
+else
+    IS_PYPY=0
+fi
+
+if [[ $FULLVERSION =~ pypy([2-3])\.([7-9]) ]]; then
+    MAJOR="${BASH_REMATCH[1]}"
+    MINOR="${BASH_REMATCH[2]}"
+else
+   MINOR=${FULLVERSION##?.?.}
+fi
 
 STOP_ONERROR=${STOP_ONERROR:-1}
 
@@ -150,13 +162,14 @@ done
 
 
 mkdir $TESTDIR || exit $?
-cp -r ${PYENV_ROOT}/versions/${PYVERSION}.${MINOR}/lib/python${PYVERSION}/test $TESTDIR
-if [[ $PYVERSION == 3.2 ]] ; then
-    cp ${PYENV_ROOT}/versions/${PYVERSION}.${MINOR}/lib/python${PYVERSION}/test/* $TESTDIR
-    cd $TESTDIR
+
+if ((IS_PYPY)); then
+    cp -r ${PYENV_ROOT}/versions/${PYVERSION}.${MINOR}/lib-python/${MAJOR}/test $TESTDIR
 else
-    cd $TESTDIR/test
+    cp -r ${PYENV_ROOT}/versions/${PYVERSION}.${MINOR}/lib/python${PYVERSION}/test $TESTDIR
 fi
+cd $TESTDIR/test
+
 pyenv local $FULLVERSION
 export PYTHONPATH=$TESTDIR
 export PATH=${PYENV_ROOT}/shims:${PATH}
@@ -170,7 +183,11 @@ if [[ -n $1 ]] ; then
     files=$@
     typeset -a files_ary=( $(echo $@) )
     if (( ${#files_ary[@]} == 1 || DONT_SKIP_TESTS == 1 )) ; then
-	SKIP_TESTS=()
+	for file in $files; do
+	    if (( SKIP_TESTS[$file] != "pytest" || SKIP_TESTS[$file] != "pytest_module" )); then
+	       SKIP_TESTS[$file]=1;
+	    fi
+	done
     fi
 else
     files=$(echo test_*.py)
@@ -184,9 +201,16 @@ NOT_INVERTED_TESTS=${NOT_INVERTED_TESTS:-1}
 for file in $files; do
     # AIX bash doesn't grok [[ -v SKIP... ]]
     [[ -z ${SKIP_TESTS[$file]} ]] && SKIP_TESTS[$file]=0
-    if [[ ${SKIP_TESTS[$file]} == ${NOT_INVERTED_TESTS} ]] ; then
-	((skipped++))
-	continue
+
+    if [[ ${SKIP_TESTS[$file]} == "pytest" ]]; then
+	PYTHON=pytest
+    elif [[ ${SKIP_TESTS[$file]} == "pytest_module" ]]; then
+	PYTHON="$PYTHON -m pytest"
+    else
+	if [[ ${SKIP_TESTS[$file]}s == ${NOT_INVERTED_TESTS} ]] ; then
+	    ((skipped++))
+	    continue
+	fi
     fi
 
     # If the fails *before* decompiling, skip it!
@@ -209,7 +233,11 @@ for file in $files; do
     ((i++))
     # (( i > 40 )) && break
     short_name=$(basename $file .py)
-    decompiled_file=$short_name-${PYVERSION}.pyc
+    if ((IS_PYPY)); then
+	decompiled_file=$short_name-${MAJOR}.${MINOR}.pyc
+    else
+	decompiled_file=$short_name-${PYVERSION}.pyc
+    fi
     $fulldir/compile-file.py $file && \
     mv $file{,.orig} && \
     echo ==========  $(date +%X) Decompiling $file ===========

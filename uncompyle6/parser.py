@@ -1,4 +1,4 @@
-#  Copyright (c) 2015-2022 Rocky Bernstein
+#  Copyright (c) 2015-2024 Rocky Bernstein
 #  Copyright (c) 2005 by Dan Pascu <dan@windowmaker.org>
 #  Copyright (c) 2000-2002 by hartmut Goebel <h.goebel@crazy-compilers.com>
 #  Copyright (c) 1999 John Aycock
@@ -21,9 +21,10 @@ Common uncompyle6 parser routines.
 
 import sys
 
-from spark_parser import GenericASTBuilder, DEFAULT_DEBUG as PARSER_DEFAULT_DEBUG
-from uncompyle6.show import maybe_show_asm
+from spark_parser import DEFAULT_DEBUG as PARSER_DEFAULT_DEBUG, GenericASTBuilder
 from xdis import iscode
+
+from uncompyle6.show import maybe_show_asm
 
 
 class ParserError(Exception):
@@ -44,8 +45,8 @@ def nop_func(self, args):
 
 
 class PythonParser(GenericASTBuilder):
-    def __init__(self, SyntaxTree, start, debug):
-        super(PythonParser, self).__init__(SyntaxTree, start, debug)
+    def __init__(self, syntax_tree_class, start, debug):
+        super(PythonParser, self).__init__(syntax_tree_class, start, debug)
         # FIXME: customize per python parser version
 
         # These are the non-terminals we should collect into a list.
@@ -91,7 +92,14 @@ class PythonParser(GenericASTBuilder):
         # singleton reduction that we can simplify. It also happens to be optional
         # in its other derivation
         self.optional_nt |= frozenset(
-            ("come_froms", "suite_stmts", "l_stmts_opt", "c_stmts_opt", "stmts_opt", "stmt")
+            (
+                "come_froms",
+                "suite_stmts",
+                "l_stmts_opt",
+                "c_stmts_opt",
+                "stmts_opt",
+                "stmt",
+            )
         )
 
         # Reduce singleton reductions in these nonterminals:
@@ -99,10 +107,11 @@ class PythonParser(GenericASTBuilder):
         # so on but that would require major changes to the
         # semantic actions
         self.singleton = frozenset(
-            ("str", "store", "_stmts", "suite_stmts_opt", "inplace_op")
+            ("str", "store", "_stmts", "suite_stmts_opt", "inplace_op", "add_value")
         )
         # Instructions filled in from scanner
         self.insts = []
+        self.version = tuple()
 
     def ast_first_offset(self, ast):
         if hasattr(ast, "offset"):
@@ -112,10 +121,10 @@ class PythonParser(GenericASTBuilder):
 
     def add_unique_rule(self, rule, opname, arg_count, customize):
         """Add rule to grammar, but only if it hasn't been added previously
-           opname and stack_count are used in the customize() semantic
-           the actions to add the semantic action rule. Stack_count is
-           used in custom opcodes like MAKE_FUNCTION to indicate how
-           many arguments it has. Often it is not used.
+        opname and stack_count are used in the customize() semantic
+        the actions to add the semantic action rule. Stack_count is
+        used in custom opcodes like MAKE_FUNCTION to indicate how
+        many arguments it has. Often it is not used.
         """
         if rule not in self.new_rules:
             # print("XXX ", rule) # debug
@@ -151,9 +160,9 @@ class PythonParser(GenericASTBuilder):
         Remove recursive references to allow garbage
         collector to collect this object.
         """
-        for dict in (self.rule2func, self.rules, self.rule2name):
-            for i in list(dict.keys()):
-                dict[i] = None
+        for rule_dict in (self.rule2func, self.rules, self.rule2name):
+            for i in list(rule_dict.keys()):
+                rule_dict[i] = None
         for i in dir(self):
             setattr(self, i, None)
 
@@ -164,11 +173,11 @@ class PythonParser(GenericASTBuilder):
 
         def fix(c):
             s = str(c)
-            last_token_pos = s.find("_")
-            if last_token_pos == -1:
+            token_pos = s.find("_")
+            if token_pos == -1:
                 return s
             else:
-                return s[:last_token_pos]
+                return s[:token_pos]
 
         prefix = ""
         if parent and tokens:
@@ -199,7 +208,7 @@ class PythonParser(GenericASTBuilder):
             if instructions[finish].linestart:
                 break
             pass
-        if start > 0:
+        if start >= 0:
             err_token = instructions[index]
             print("Instruction context:")
             for i in range(start, finish):
@@ -213,10 +222,18 @@ class PythonParser(GenericASTBuilder):
             raise ParserError(None, -1, self.debug["reduce"])
 
     def get_pos_kw(self, token):
-        """Return then the number of positional parameters and
-        represented by the attr field of token"""
-        # Low byte indicates number of positional paramters,
+        """
+        Return then the number of positional parameters and keyword
+        parfameters represented by the attr (operand) field of
+        token.
+
+        This appears in CALL_FUNCTION or CALL_METHOD (PyPy) tokens
+        """
+        # Low byte indicates number of positional parameters,
         # high byte number of keyword parameters
+        assert token.kind.startswith("CALL_FUNCTION") or token.kind.startswith(
+            "CALL_METHOD"
+        )
         args_pos = token.attr & 0xFF
         args_kw = (token.attr >> 8) & 0xFF
         return args_pos, args_kw
@@ -261,13 +278,13 @@ class PythonParser(GenericASTBuilder):
         print(children)
         return GenericASTBuilder.ambiguity(self, children)
 
-    def resolve(self, list):
-        if len(list) == 2 and "function_def" in list and "assign" in list:
+    def resolve(self, rule: list):
+        if len(rule) == 2 and "function_def" in rule and "assign" in rule:
             return "function_def"
-        if "grammar" in list and "expr" in list:
+        if "grammar" in rule and "expr" in rule:
             return "expr"
-        # print >> sys.stderr, 'resolve', str(list)
-        return GenericASTBuilder.resolve(self, list)
+        # print >> sys.stderr, 'resolve', str(rule)
+        return GenericASTBuilder.resolve(self, rule)
 
     ###############################################
     #  Common Python 2 and Python 3 grammar rules #
@@ -296,6 +313,9 @@ class PythonParser(GenericASTBuilder):
         c_stmts ::= _stmts lastc_stmt
         c_stmts ::= lastc_stmt
         c_stmts ::= continues
+
+        ending_return  ::= RETURN_VALUE RETURN_LAST
+        ending_return  ::= RETURN_VALUE_LAMBDA LAMBDA_MARKER
 
         lastc_stmt ::= iflaststmt
         lastc_stmt ::= forelselaststmt
@@ -354,7 +374,7 @@ class PythonParser(GenericASTBuilder):
         stmt ::= tryelsestmt
         stmt ::= tryfinallystmt
         stmt ::= with
-        stmt ::= withasstmt
+        stmt ::= with_as
 
         stmt   ::= delete
         delete ::= DELETE_FAST
@@ -371,6 +391,10 @@ class PythonParser(GenericASTBuilder):
 
         returns ::= return
         returns ::= _stmts return
+        
+        # NOP
+        stmt     ::= nop_stmt
+        nop_stmt ::= NOP
 
         """
         pass
@@ -590,11 +614,12 @@ class PythonParser(GenericASTBuilder):
         compare        ::= compare_single
         compare_single ::= expr expr COMPARE_OP
 
-        # A compare_chained is two comparisions like x <= y <= z
-        compare_chained  ::= expr compare_chained1 ROT_TWO POP_TOP _come_froms
-        compare_chained2 ::= expr COMPARE_OP JUMP_FORWARD
+        # A compare_chained is two comparisons, as in: x <= y <= z
+        compare_chained       ::= expr compared_chained_middle ROT_TWO POP_TOP
+                                  _come_froms
+        compare_chained_right ::= expr COMPARE_OP JUMP_FORWARD
 
-        # Non-null kvlist items are broken out in the indiviual grammars
+        # Non-null kvlist items are broken out in the individual grammars
         kvlist ::=
 
         # Positional arguments in make_function
@@ -648,6 +673,8 @@ def get_python_parser(
 
     version = version[:2]
 
+    p = None
+
     # FIXME: there has to be a better way...
     # We could do this as a table lookup, but that would force us
     # in import all of the parsers all of the time. Perhaps there is
@@ -661,7 +688,7 @@ def get_python_parser(
                 if compile_mode == "exec":
                     p = parse10.Python10Parser(debug_parser)
                 else:
-                    p = parse10.Python01ParserSingle(debug_parser)
+                    p = parse10.Python10ParserSingle(debug_parser)
             elif version == (1, 1):
                 import uncompyle6.parsers.parse11 as parse11
 
@@ -867,6 +894,7 @@ def python_parser(
     :param showasm:         Flag which determines whether the disassembled and
                             ingested code is written to sys.stdout or not.
     :param parser_debug:    dict containing debug flags for the spark parser.
+    :param is_pypy:         True if we are running PyPY
 
     :return: Abstract syntax tree representation of the code object.
     """
@@ -895,7 +923,7 @@ def python_parser(
 if __name__ == "__main__":
 
     def parse_test(co):
-        from xdis import PYTHON_VERSION_TRIPLE, IS_PYPY
+        from xdis import IS_PYPY, PYTHON_VERSION_TRIPLE
 
         ast = python_parser(PYTHON_VERSION_TRIPLE, co, showasm=True, is_pypy=IS_PYPY)
         print(ast)

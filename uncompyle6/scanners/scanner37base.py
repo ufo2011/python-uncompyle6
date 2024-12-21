@@ -1,4 +1,4 @@
-#  Copyright (c) 2015-2020, 2022 by Rocky Bernstein
+#  Copyright (c) 2015-2020, 2022-2024 by Rocky Bernstein
 #  Copyright (c) 2005 by Dan Pascu <dan@windowmaker.org>
 #  Copyright (c) 2000-2002 by hartmut Goebel <h.goebel@crazy-compilers.com>
 #
@@ -15,7 +15,7 @@
 #  You should have received a copy of the GNU General Public License
 #  along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
-Python 37 bytecode scanner/deparser base.
+Python 3.7 bytecode scanner/deparser base.
 
 Also we *modify* the instruction sequence to assist deparsing code.
 For example:
@@ -29,32 +29,40 @@ For example:
 Finally we save token information.
 """
 
+import sys
 from typing import Any, Dict, List, Set, Tuple
 
-from xdis import iscode, instruction_size, Instruction
-from xdis.bytecode import _get_const_info
-
-from uncompyle6.scanner import Token
 import xdis
 
 # Get all the opcodes into globals
 import xdis.opcodes.opcode_37 as op3
+from xdis import Instruction, instruction_size, iscode
+from xdis.bytecode import _get_const_info
 
-from uncompyle6.scanner import Scanner
-
-import sys
+from uncompyle6.scanner import Scanner, Token
 
 globals().update(op3.opmap)
 
 
+CONST_COLLECTIONS = ("CONST_LIST", "CONST_SET", "CONST_DICT")
+
+
 class Scanner37Base(Scanner):
-    def __init__(self, version: Tuple[int], show_asm=None, debug="", is_pypy=False):
+    def __init__(
+        self, version: Tuple[int, int], show_asm=None, debug="", is_pypy=False
+    ):
         super(Scanner37Base, self).__init__(version, show_asm, is_pypy)
+        self.offset2tok_index = None
         self.debug = debug
+
+        # True is code is from PyPy
         self.is_pypy = is_pypy
 
+        # Bytecode converted into instruction
+        self.insts = []
+
         # Create opcode classification sets
-        # Note: super initilization above initializes self.opc
+        # Note: super initialization above initializes self.opc
 
         # Ops that start SETUP_ ... We will COME_FROM with these names
         # Some blocks and END_ statements. And they can start
@@ -139,7 +147,7 @@ class Scanner37Base(Scanner):
                 self.opc.POP_JUMP_IF_FALSE,
             ]
         )
-        # Not really a set, but still clasification-like
+        # Not really a set, but still classification-like
         self.statement_opcode_sequences = [
             (self.opc.POP_JUMP_IF_FALSE, self.opc.JUMP_FORWARD),
             (self.opc.POP_JUMP_IF_FALSE, self.opc.JUMP_ABSOLUTE),
@@ -184,8 +192,7 @@ class Scanner37Base(Scanner):
         return
 
     def ingest(self, co, classname=None, code_objects={}, show_asm=None):
-        """
-        Create "tokens" the bytecode of an Python code object. Largely these
+        """Create "tokens" the bytecode of an Python code object. Largely these
         are the opcode name, but in some cases that has been modified to make parsing
         easier.
         returning a list of uncompyle6 Token's.
@@ -193,14 +200,18 @@ class Scanner37Base(Scanner):
         Some transformations are made to assist the deparsing grammar:
            -  various types of LOAD_CONST's are categorized in terms of what they load
            -  COME_FROM instructions are added to assist parsing control structures
-           -  operands with stack argument counts or flag masks are appended to the opcode name, e.g.:
-              *  BUILD_LIST, BUILD_SET
-              *  MAKE_FUNCTION and FUNCTION_CALLS append the number of positional arguments
+           -  operands with stack argument counts or flag masks are appended to the
+              opcode name, e.g.:
+                *  BUILD_LIST, BUILD_SET
+                *  MAKE_FUNCTION and FUNCTION_CALLS append the number of positional
+                   arguments
            -  EXTENDED_ARGS instructions are removed
 
-        Also, when we encounter certain tokens, we add them to a set which will cause custom
-        grammar rules. Specifically, variable arg tokens like MAKE_FUNCTION or BUILD_LIST
-        cause specific rules for the specific number of arguments they take.
+        Also, when we encounter certain tokens, we add them to a set
+        which will cause custom grammar rules. Specifically, variable
+        arg tokens like MAKE_FUNCTION or BUILD_LIST cause specific
+        rules for the specific number of arguments they take.
+
         """
 
         def tokens_append(j, token):
@@ -215,10 +226,20 @@ class Scanner37Base(Scanner):
 
         bytecode = self.build_instructions(co)
 
-        # show_asm = 'both'
         if show_asm in ("both", "before"):
-            for instr in bytecode.get_instructions(co):
-                print(instr.disassemble(self.opc))
+            print("\n# ---- disassembly:")
+            bytecode.disassemble_bytes(
+                co.co_code,
+                varnames=co.co_varnames,
+                names=co.co_names,
+                constants=co.co_consts,
+                cells=bytecode._cell_names,
+                line_starts=bytecode._linestarts,
+                asm_format="extended",
+                filename=co.co_filename,
+                show_source=True,
+                first_line_number=co.co_firstlineno,
+            )
 
         # "customize" is in the process of going away here
         customize = {}
@@ -237,7 +258,6 @@ class Scanner37Base(Scanner):
 
         n = len(self.insts)
         for i, inst in enumerate(self.insts):
-
             # We need to detect the difference between:
             #   raise AssertionError
             #  and
@@ -251,10 +271,9 @@ class Scanner37Base(Scanner):
                 if (
                     next_inst.opname == "LOAD_GLOBAL"
                     and next_inst.argval == "AssertionError"
-                    and inst.argval
+                    and inst.argval is not None
                 ):
-                    raise_idx = self.offset2inst_index[self.prev_op[inst.argval]]
-                    raise_inst = self.insts[raise_idx]
+                    raise_inst = self.get_inst(self.prev_op[inst.argval])
                     if raise_inst.opname.startswith("RAISE_VARARGS"):
                         self.load_asserts.add(next_inst.offset)
                     pass
@@ -267,30 +286,33 @@ class Scanner37Base(Scanner):
         # To simplify things we want to untangle this. We also
         # do this loop before we compute jump targets.
         for i, inst in enumerate(self.insts):
-
             # One artifact of the "too-small" operand problem, is that
             # some backward jumps, are turned into forward jumps to another
             # "extended arg" backward jump to the same location.
             if inst.opname == "JUMP_FORWARD":
-                jump_inst = self.insts[self.offset2inst_index[inst.argval]]
+                jump_inst = self.get_inst(inst.argval)
                 if jump_inst.has_extended_arg and jump_inst.opname.startswith("JUMP"):
-                    # Create comination of the jump-to instruction and
+                    # Create a combination of the jump-to instruction and
                     # this one. Keep the position information of this instruction,
                     # but the operator and operand properties come from the other
                     # instruction
                     self.insts[i] = Instruction(
-                        jump_inst.opname,
-                        jump_inst.opcode,
-                        jump_inst.optype,
-                        jump_inst.inst_size,
-                        jump_inst.arg,
-                        jump_inst.argval,
-                        jump_inst.argrepr,
-                        jump_inst.has_arg,
-                        inst.offset,
-                        inst.starts_line,
-                        inst.is_jump_target,
-                        inst.has_extended_arg,
+                        opcode=jump_inst.opcode,
+                        opname=jump_inst.opname,
+                        arg=jump_inst.arg,
+                        argval=jump_inst.argval,
+                        argrepr=jump_inst.argrepr,
+                        offset=inst.offset,
+                        starts_line=inst.starts_line,
+                        is_jump_target=inst.is_jump_target,
+                        positions=None,
+                        optype=jump_inst.optype,
+                        has_arg=jump_inst.has_arg,
+                        inst_size=jump_inst.inst_size,
+                        has_extended_arg=inst.has_extended_arg,
+                        fallthrough=False,
+                        tos_str=None,
+                        start_offset=None,
                     )
 
         # Get jump targets
@@ -302,15 +324,8 @@ class Scanner37Base(Scanner):
 
         j = 0
         for i, inst in enumerate(self.insts):
-
             argval = inst.argval
             op = inst.opcode
-
-            if inst.opname == "EXTENDED_ARG":
-                # FIXME: The EXTENDED_ARG is used to signal annotation
-                # parameters
-                if i + 1 < n and self.insts[i + 1].opcode != self.opc.MAKE_FUNCTION:
-                    continue
 
             if inst.offset in jump_targets:
                 jump_idx = 0
@@ -337,13 +352,14 @@ class Scanner37Base(Scanner):
                     j = tokens_append(
                         j,
                         Token(
-                            come_from_name,
-                            jump_offset,
-                            repr(jump_offset),
+                            opname=come_from_name,
+                            attr=jump_offset,
+                            pattr=repr(jump_offset),
                             offset="%s_%s" % (inst.offset, jump_idx),
                             has_arg=True,
                             opc=self.opc,
                             has_extended_arg=False,
+                            optype=inst.optype,
                         ),
                     )
                     jump_idx += 1
@@ -415,6 +431,7 @@ class Scanner37Base(Scanner):
                         has_arg=inst.has_arg,
                         opc=self.opc,
                         has_extended_arg=inst.has_extended_arg,
+                        optype=inst.optype,
                     ),
                 )
                 continue
@@ -442,9 +459,9 @@ class Scanner37Base(Scanner):
             elif op == self.opc.JUMP_ABSOLUTE:
                 #  Refine JUMP_ABSOLUTE further in into:
                 #
-                # * "JUMP_LOOP"    - which are are used in loops. This is sometimes
+                # * "JUMP_LOOP"    - which are used in loops. This is sometimes
                 #                   found at the end of a looping construct
-                # * "BREAK_LOOP"  - which are are used to break loops.
+                # * "BREAK_LOOP"  - which are used to break loops.
                 # * "CONTINUE"    - jumps which may appear in a "continue" statement.
                 #                   It is okay to confuse this with JUMP_LOOP. The
                 #                   grammar should tolerate this.
@@ -464,12 +481,17 @@ class Scanner37Base(Scanner):
                     next_opname = self.insts[i + 1].opname
 
                     # 'Continue's include jumps to loops that are not
-                    # and the end of a block which follow with POP_BLOCK and COME_FROM_LOOP.
-                    # If the JUMP_ABSOLUTE is to a FOR_ITER and it is followed by another JUMP_FORWARD
-                    # then we'll take it as a "continue".
-                    is_continue = (
-                        self.insts[self.offset2inst_index[target]].opname == "FOR_ITER"
-                        and self.insts[i + 1].opname == "JUMP_FORWARD"
+                    # and the end of a block which follow with
+                    # POP_BLOCK and COME_FROM_LOOP.  If the
+                    # JUMP_ABSOLUTE is to a FOR_ITER, and it is
+                    # followed by another JUMP_FORWARD then we'll take
+                    # it as a "continue".
+                    next_inst = self.insts[i + 1]
+                    is_continue = self.insts[
+                        self.offset2inst_index[target]
+                    ].opname == "FOR_ITER" and next_inst.opname in (
+                        "JUMP_FORWARD",
+                        "JUMP_ABSOLUTE",
                     )
 
                     if self.version < (3, 8) and (
@@ -484,21 +506,65 @@ class Scanner37Base(Scanner):
                     ):
                         opname = "CONTINUE"
                     else:
+                        # "continue" versus "break_loop" dectction is more complicated
+                        # because "continue" to an outer loop is really a "break loop"
                         opname = "JUMP_BACK"
+
                         # FIXME: this is a hack to catch stuff like:
                         #   if x: continue
                         # the "continue" is not on a new line.
-                        # There are other situations where we don't catch
-                        # CONTINUE as well.
-                        if tokens[-1].kind == "JUMP_BACK" and tokens[-1].attr <= argval:
+                        #
+                        # Another situation is where we have
+                        #   for method in methods:
+                        #      for B in method:
+                        #         if c:
+                        #           return
+                        #        break  # A "continue" but not the innermost one
+                        if tokens[-1].kind == "JUMP_LOOP" and tokens[-1].attr <= argval:
                             if tokens[-2].kind == "BREAK_LOOP":
                                 del tokens[-1]
+                                j -= 1
                             else:
-                                # intern is used because we are changing the *previous* token
-                                tokens[-1].kind = sys.intern("CONTINUE")
-                    if last_op_was_break and opname == "CONTINUE":
-                        last_op_was_break = False
-                        continue
+                                # "intern" is used because we are
+                                # changing the *previous* token.  A
+                                # POP_TOP suggests a "break" rather
+                                # than a "continue"?
+                                if tokens[-2] == "POP_TOP" and (
+                                    is_continue and next_inst.argval != tokens[-1].attr
+                                ):
+                                    tokens[-1].kind = sys.intern("BREAK_LOOP")
+                                else:
+                                    tokens[-1].kind = sys.intern("CONTINUE")
+                                    last_continue = tokens[-1]
+                                    pass
+                                pass
+                            pass
+                    #     elif (
+                    #         last_continue is not None
+                    #         and tokens[-1].kind == "JUMP_LOOP"
+                    #         and last_continue.attr <= tokens[-1].attr
+                    #         and last_continue.offset > tokens[-1].attr
+                    #     ):
+                    #         # Handle mis-characterized "CONTINUE"
+                    #         # We have a situation like:
+                    #         # loop ... for or while)
+                    #         #   loop
+                    #         #     if ...:   # code below starts here
+                    #         #       break  # not continue
+                    #         #
+                    #         #   POP_JUMP_IF_FALSE_LOOP   # to outer loop
+                    #         #   JUMP_LOOP                # to inner loop
+                    #         #   ...
+                    #         #   JUMP_LOOP                # to outer loop
+                    #         tokens[-2].kind = sys.intern("BREAK_LOOP")
+                    #         pass
+
+                    # if last_op_was_break and opname == "CONTINUE":
+                    #     last_op_was_break = False
+                    #     continue
+                    pass
+                else:
+                    opname = "JUMP_FORWARD"
 
             elif inst.offset in self.load_asserts:
                 opname = "LOAD_ASSERT"
@@ -516,12 +582,15 @@ class Scanner37Base(Scanner):
                     has_arg=inst.has_arg,
                     opc=self.opc,
                     has_extended_arg=inst.has_extended_arg,
+                    optype=inst.optype,
                 ),
             )
             pass
 
-        if show_asm in ("both", "after"):
-            for t in tokens:
+        if show_asm in ("both", "after") and self.version < (3, 8):
+            print("\n# ---- tokenization:")
+            # FIXME: t.format() is changing tokens!
+            for t in tokens.copy():
                 print(t.format(line_prefix=""))
             print()
         return tokens, customize
@@ -929,7 +998,7 @@ class Scanner37Base(Scanner):
 if __name__ == "__main__":
     from xdis.version_info import PYTHON_VERSION_TRIPLE, version_tuple_to_str
 
-    if PYTHON_VERSION_TRIPLE[:2] == (3, 7):
+    if (3, 7) <= PYTHON_VERSION_TRIPLE[:2] < (3, 9):
         import inspect
 
         co = inspect.currentframe().f_code  # type: ignore
@@ -938,5 +1007,8 @@ if __name__ == "__main__":
         for t in tokens:
             print(t)
     else:
-        print(f"Need to be Python 3.7 to demo; I am version {version_tuple_to_str()}.")
+        print(
+            "Need to be Python 3.7..3.8 to demo; "
+            f"I am version {version_tuple_to_str()}."
+        )
     pass

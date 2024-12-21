@@ -8,14 +8,15 @@ scanner routine for Python 3.
 
 from __future__ import print_function
 
+import xdis
+from xdis import instruction_size
+
 # bytecode verification, verify(), uses JUMP_OPs from here
 from xdis.opcodes import opcode_30 as opc
-from xdis import instruction_size
-import xdis
-
-JUMP_TF = frozenset([opc.JUMP_IF_FALSE, opc.JUMP_IF_TRUE])
 
 from uncompyle6.scanners.scanner3 import Scanner3
+
+JUMP_TF = frozenset([opc.JUMP_IF_FALSE, opc.JUMP_IF_TRUE])
 
 
 class Scanner30(Scanner3):
@@ -40,7 +41,7 @@ class Scanner30(Scanner3):
         start = parent["start"]
         end = parent["end"]
 
-        # Pick inner-most parent for our offset
+        # Pick innermost parent for our offset
         for struct in self.structs:
             current_start = struct["start"]
             current_end = struct["end"]
@@ -193,7 +194,7 @@ class Scanner30(Scanner3):
             # Is it an "and" inside an "if" or "while" block
             if op == opc.JUMP_IF_FALSE:
 
-                # Search for another JUMP_IF_FALSE targetting the same op,
+                # Search for another JUMP_IF_FALSE targeting the same op,
                 # in current statement, starting from current offset, and filter
                 # everything inside inner 'or' jumps and midline ifs
                 match = self.rem_or(
@@ -348,7 +349,7 @@ class Scanner30(Scanner3):
                     if if_end > start:
                         return
 
-                end = self.restrict_to_parent(if_end, parent)
+                self.restrict_to_parent(if_end, parent)
 
                 self.structs.append(
                     {"type": "if-then", "start": start, "end": pre_rtarget}
@@ -365,20 +366,19 @@ class Scanner30(Scanner3):
                 #                          'end': end})
                 #     self.else_start[rtarget] = end
             elif self.is_jump_back(pre_rtarget, 0):
-                if_end = rtarget
                 self.structs.append(
                     {"type": "if-then", "start": start, "end": pre_rtarget}
                 )
                 self.not_continue.add(pre_rtarget)
             elif code[pre_rtarget] in (self.opc.RETURN_VALUE, self.opc.BREAK_LOOP):
                 self.structs.append({"type": "if-then", "start": start, "end": rtarget})
-                # It is important to distingish if this return is inside some sort
+                # It is important to distinguish if this return is inside some sort
                 # except block return
                 jump_prev = prev_op[offset]
                 if self.is_pypy and code[jump_prev] == self.opc.COMPARE_OP:
                     if self.opc.cmp_op[code[jump_prev + 1]] == "exception-match":
                         return
-                if self.version >= 3.5:
+                if self.version >= (3, 5):
                     # Python 3.5 may remove as dead code a JUMP
                     # instruction after a RETURN_VALUE. So we check
                     # based on seeing SETUP_EXCEPT various places.
@@ -399,7 +399,7 @@ class Scanner30(Scanner3):
                             pass
                     pass
                 if code[pre_rtarget] == self.opc.RETURN_VALUE:
-                    if self.version == 3.0:
+                    if self.version == (3, 0):
                         next_op = rtarget
                         if code[next_op] == self.opc.POP_TOP:
                             next_op = rtarget
@@ -437,7 +437,7 @@ class Scanner30(Scanner3):
                     self.fixed_jumps[offset] = self.restrict_to_parent(target, parent)
                     pass
                 pass
-        elif self.version >= 3.5:
+        elif self.version >= (3, 5):
             # 3.5+ has Jump optimization which too often causes RETURN_VALUE to get
             # misclassified as RETURN_END_IF. Handle that here.
             # In RETURN_VALUE, JUMP_ABSOLUTE, RETURN_VALUE is never RETURN_END_IF
@@ -483,4 +483,3 @@ if __name__ == "__main__":
         pass
     else:
         print("Need to be Python 3.0 to demo; I am version %s" % version_tuple_to_str())
-[w

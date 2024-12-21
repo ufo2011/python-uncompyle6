@@ -1,4 +1,4 @@
-#  Copyright (c) 2018-2019, 2021-2022 by Rocky Bernstein
+#  Copyright (c) 2018-2019, 2021-2022 2024 by Rocky Bernstein
 #
 #  This program is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -17,9 +17,15 @@
 """
 
 from uncompyle6.parsers.treenode import SyntaxTree
-from uncompyle6.semantics.consts import INDENT_PER_LEVEL, NO_PARENTHESIS_EVER, PRECEDENCE, TABLE_R, TABLE_DIRECT
-from uncompyle6.semantics.helper import flatten_list
 from uncompyle6.scanners.tok import Token
+from uncompyle6.semantics.consts import (
+    INDENT_PER_LEVEL,
+    NO_PARENTHESIS_EVER,
+    PRECEDENCE,
+    TABLE_DIRECT,
+    TABLE_R,
+)
+from uncompyle6.semantics.helper import flatten_list
 
 
 def customize_for_version(self, is_pypy, version):
@@ -27,22 +33,29 @@ def customize_for_version(self, is_pypy, version):
         ########################
         # PyPy changes
         #######################
-        TABLE_DIRECT.update({
-            "assert": ("%|assert %c\n", 0),
-            "assert_pypy":	( '%|assert %c\n' ,     (1, 'assert_expr') ),
-            # This is as a result of an if transformation
-            'assert0_pypy':	( '%|assert %c\n' ,     0),
+        # fmt: off
+        self.TABLE_DIRECT.update({
 
-            'assert_not_pypy':	( '%|assert not %c\n' , (1, 'assert_exp') ),
-            'assert2_not_pypy':	( '%|assert not %c, %c\n' , (1, 'assert_exp'),
-                                  (4, 'expr') ),
-            'assert2_pypy':	( '%|assert %c, %c\n' , (1, 'assert_expr'),
-                                  (4, 'expr') ),
-            'try_except_pypy':	   ( '%|try:\n%+%c%-%c\n\n', 1, 2 ),
-            'tryfinallystmt_pypy': ( '%|try:\n%+%c%-%|finally:\n%+%c%-\n\n', 1, 3 ),
-            'assign3_pypy':        ( '%|%c, %c, %c = %c, %c, %c\n', 5, 4, 3, 0, 1, 2 ),
-            'assign2_pypy':        ( '%|%c, %c = %c, %c\n', 3, 2, 0, 1),
+            "assert":           ("%|assert %c\n", 0),
+            # This can happen as a result of an if transformation
+            "assert2":          ("%|assert %c, %c\n", 0, 3),
+            "assert_pypy":	    ( "%|assert %c\n" ,     (1, "assert_expr") ),
+            # This is as a result of an if transformation
+            'assert0_pypy':	    ( "%|assert %c\n" ,     0),
+
+            'assert_not_pypy':	( "%|assert not %c\n" , (1, "assert_exp") ),
+            "assert2_not_pypy": (
+                    "%|assert not %c, %c\n",
+                    (1, "assert_exp"),
+                    (4, "expr"),
+                ),
+
+            "try_except_pypy":	   ( "%|try:\n%+%c%-%c\n\n", 1, 2 ),
+            "tryfinallystmt_pypy": ( "%|try:\n%+%c%-%|finally:\n%+%c%-\n\n", 1, 3 ),
+            "assign3_pypy":        ( "%|%c, %c, %c = %c, %c, %c\n", 5, 4, 3, 0, 1, 2 ),
+            "assign2_pypy":        ( "%|%c, %c = %c, %c\n", 3, 2, 0, 1),
             })
+        # fmt: on
 
         if version[:2] >= (3, 7):
 
@@ -53,12 +66,18 @@ def customize_for_version(self, is_pypy, version):
                 kw_names = node[-2]
                 assert kw_names == "pypy_kw_keys"
 
-                flat_elems = flatten_list(node[1:-2])
-                n = len(flat_elems)
-                assert n == arg_count
                 kwargs_names = kw_names[0].attr
                 kwarg_count = len(kwargs_names)
                 pos_argc = arg_count - kwarg_count
+
+                flat_elems = flatten_list(node[1:-2])
+                n = len(flat_elems)
+                assert n == arg_count, "n: %s, arg_count: %s\n%s" % (
+                    n,
+                    arg_count,
+                    node,
+                )
+
                 sep = ""
 
                 for i in range(pos_argc):
@@ -95,39 +114,42 @@ def customize_for_version(self, is_pypy, version):
         ########################
         # Without PyPy
         #######################
-        TABLE_DIRECT.update({
-            # "assert" and "assert_expr" are added via transform rules.
-            "assert": ("%|assert %c\n", 0),
-            "assert2": ("%|assert %c, %c\n", 0, 3),
-
-            # Created only via transformation
-            "assertnot": ("%|assert not %p\n", (0, PRECEDENCE['unary_not'])),
-            "assert2not": ( "%|assert not %p, %c\n" ,
-                            (0, PRECEDENCE['unary_not']), 3 ),
-
-            "assign2": ("%|%c, %c = %c, %c\n", 3, 4, 0, 1),
-            "assign3": ("%|%c, %c, %c = %c, %c, %c\n", 5, 6, 7, 0, 1, 2),
-            "try_except": ("%|try:\n%+%c%-%c\n\n", 1, 3),
-        })
+        self.TABLE_DIRECT.update(
+            {
+                # "assert" and "assert_expr" are added via transform rules.
+                "assert": ("%|assert %c\n", 0),
+                "assert2": ("%|assert %c, %c\n", 0, 3),
+                # Created only via transformation
+                "assertnot": ("%|assert not %p\n", (0, PRECEDENCE["unary_not"])),
+                "assert2not": (
+                    "%|assert not %p, %c\n",
+                    (0, PRECEDENCE["unary_not"]),
+                    3,
+                ),
+                "assign2": ("%|%c, %c = %c, %c\n", 3, 4, 0, 1),
+                "assign3": ("%|%c, %c, %c = %c, %c, %c\n", 5, 6, 7, 0, 1, 2),
+                "try_except": ("%|try:\n%+%c%-%c\n\n", 1, 3),
+            }
+        )
     if version >= (3, 0):
         if version >= (3, 2):
-            TABLE_DIRECT.update(
+            self.TABLE_DIRECT.update(
                 {"del_deref_stmt": ("%|del %c\n", 0), "DELETE_DEREF": ("%{pattr}", 0)}
             )
         from uncompyle6.semantics.customize3 import customize_for_version3
 
         customize_for_version3(self, version)
     else:  # < 3.0
-        TABLE_DIRECT.update(
+        self.TABLE_DIRECT.update(
             {"except_cond3": ("%|except %c, %c:\n", (1, "expr"), (-2, "store"))}
         )
         if version <= (2, 6):
-            TABLE_DIRECT["testtrue_then"] = TABLE_DIRECT["testtrue"]
+            self.TABLE_DIRECT["testtrue_then"] = self.TABLE_DIRECT["testtrue"]
 
         if (2, 4) <= version <= (2, 6):
-            TABLE_DIRECT.update({"comp_for": (" for %c in %c", 3, 1)})
+            self.TABLE_DIRECT.update({"comp_for": (" for %c in %c", 3, 1)})
         else:
-            TABLE_DIRECT.update({"comp_for": (" for %c in %c%c", 2, 0, 3)})
+            self.TABLE_DIRECT.update({"comp_for": (" for %c in %c%c", 2, 0, 3)})
 
         if version >= (2, 5):
             from uncompyle6.semantics.customize25 import customize_for_version25
@@ -175,7 +197,7 @@ def customize_for_version(self, is_pypy, version):
                     )
                 ],
             )
-            TABLE_DIRECT.update(
+            self.TABLE_DIRECT.update(
                 {
                     "importmultiple": ("%|import %c%c\n", 2, 3),
                     "import_cont": (", %c", 2),
@@ -187,6 +209,7 @@ def customize_for_version(self, is_pypy, version):
                 }
             )
             if version == (2, 4):
+
                 def n_iftrue_stmt24(node):
                     self.template_engine(("%c", 0), node)
                     self.default(node)
@@ -195,6 +218,7 @@ def customize_for_version(self, is_pypy, version):
                 self.n_iftrue_stmt24 = n_iftrue_stmt24
             elif version < (1, 4):
                 from uncompyle6.semantics.customize14 import customize_for_version14
+
                 customize_for_version14(self, version)
 
                 def n_call(node):
@@ -210,15 +234,22 @@ def customize_for_version(self, is_pypy, version):
                             sep = ", "
                         self.write(")")
                     else:
-                        self.template_engine(("%p(%P)",
-                                              (0, "expr", 100), (1,-1,", ", NO_PARENTHESIS_EVER)), node)
+                        self.template_engine(
+                            (
+                                "%p(%P)",
+                                (0, "expr", 100),
+                                (1, -1, ", ", NO_PARENTHESIS_EVER),
+                            ),
+                            node,
+                        )
                     self.prune()
+
                 self.n_call = n_call
 
             else:  # 1.0 <= version <= 2.3:
-                TABLE_DIRECT.update({"if1_stmt": ("%|if 1\n%+%c%-", 5)})
+                self.TABLE_DIRECT.update({"if1_stmt": ("%|if 1\n%+%c%-", 5)})
                 if version <= (2, 1):
-                    TABLE_DIRECT.update(
+                    self.TABLE_DIRECT.update(
                         {
                             "importmultiple": ("%c", 2),
                             # FIXME: not quite right. We have indiividual imports
@@ -232,7 +263,7 @@ def customize_for_version(self, is_pypy, version):
 
         # < 3.0 continues
 
-        TABLE_R.update(
+        self.TABLE_R.update(
             {
                 "STORE_SLICE+0": ("%c[:]", 0),
                 "STORE_SLICE+1": ("%c[%p:]", 0, (1, -1)),
@@ -244,7 +275,7 @@ def customize_for_version(self, is_pypy, version):
                 "DELETE_SLICE+3": ("%|del %c[%c:%c]\n", 0, 1, 2),
             }
         )
-        TABLE_DIRECT.update({"raise_stmt2": ("%|raise %c, %c\n", 0, 1)})
+        self.TABLE_DIRECT.update({"raise_stmt2": ("%|raise %c, %c\n", 0, 1)})
 
         # exec as a built-in statement is only in Python 2.x
         def n_exec_stmt(node):
